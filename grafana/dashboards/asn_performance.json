@@ -1,0 +1,41 @@
+{
+  "title": "ASN Performance",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "uid": "cyberWatch-asn",
+  "version": 1,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {"type": "datasource", "name": "DS", "query": "postgres", "current": {"text": "PostgreSQL", "value": "PostgreSQL"}},
+      {"type": "query", "name": "asn", "datasource": "${DS}", "query": "SELECT DISTINCT asn FROM hops WHERE asn IS NOT NULL ORDER BY asn", "refresh": 1}
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "RTT by ASN",
+      "datasource": "${DS}",
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT m.started_at as time, h.asn as metric, AVG(h.rtt_ms) as value FROM hops h JOIN measurements m ON m.id=h.measurement_id WHERE h.asn = CASE WHEN '${asn}' = '' THEN h.asn ELSE ${asn} END GROUP BY m.started_at, h.asn ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "Observed Edge Count",
+      "datasource": "${DS}",
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT m.started_at as time, COUNT(DISTINCT h.asn) as value FROM hops h JOIN measurements m ON m.id=h.measurement_id GROUP BY m.started_at ORDER BY time",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

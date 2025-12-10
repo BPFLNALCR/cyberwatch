@@ -4,6 +4,8 @@
 
 This project is an **autonomous internet measurement and topology mapping system**.
 
+The name of the software project is **cyberWatch**
+
 Core capabilities:
 
 * Actively probe the internet (traceroute, MTR, latency / packet loss).

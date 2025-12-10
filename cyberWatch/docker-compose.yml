@@ -1,0 +1,33 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cyberWatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  worker:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ./:/app
+    environment:
+      CYBERWATCH_PG_DSN: postgresql://postgres:postgres@postgres:5432/cyberWatch
+      CYBERWATCH_REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "cyberWatch.workers.worker"]
+    depends_on:
+      - redis
+      - postgres
+
+volumes:
+  pgdata:

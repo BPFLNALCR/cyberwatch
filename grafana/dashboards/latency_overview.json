@@ -1,0 +1,53 @@
+{
+  "title": "Latency Overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "uid": "cyberWatch-latency",
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "DS",
+        "query": "postgres",
+        "current": { "text": "PostgreSQL", "value": "PostgreSQL" }
+      },
+      {
+        "type": "query",
+        "name": "target",
+        "datasource": "${DS}",
+        "query": "SELECT DISTINCT target_ip FROM targets ORDER BY target_ip",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "RTT Mean by Target",
+      "datasource": "${DS}",
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT m.started_at as time, t.target_ip as metric, AVG(h.rtt_ms) as value FROM measurements m JOIN targets t ON t.id=m.target_id JOIN hops h ON h.measurement_id=m.id WHERE h.rtt_ms IS NOT NULL AND t.target_ip = CASE WHEN '${target}' = '' THEN t.target_ip ELSE '${target}' END GROUP BY m.started_at, t.target_ip ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []}
+    },
+    {
+      "type": "timeseries",
+      "title": "RTT P95 by Target",
+      "datasource": "${DS}",
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT m.started_at as time, t.target_ip as metric, percentile_cont(0.95) within group (order by h.rtt_ms) as value FROM measurements m JOIN targets t ON t.id=m.target_id JOIN hops h ON h.measurement_id=m.id WHERE h.rtt_ms IS NOT NULL AND t.target_ip = CASE WHEN '${target}' = '' THEN t.target_ip ELSE '${target}' END GROUP BY m.started_at, t.target_ip ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "ms"}, "overrides": []}
+    }
+  ]
+}

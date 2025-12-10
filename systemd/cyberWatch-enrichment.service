@@ -1,0 +1,16 @@
+[Unit]
+Description=CyberWatch Enrichment Service
+After=network.target postgresql.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT_DIR@
+ExecStart=@ROOT_DIR@/.venv/bin/python -m cyberWatch.enrichment.run_enrichment
+Restart=on-failure
+Environment=CYBERWATCH_PG_DSN=postgresql://postgres:postgres@localhost:5432/cyberWatch
+Environment=NEO4J_URI=bolt://localhost:7687
+Environment=NEO4J_USER=neo4j
+Environment=NEO4J_PASSWORD=neo4j
+
+[Install]
+WantedBy=multi-user.target

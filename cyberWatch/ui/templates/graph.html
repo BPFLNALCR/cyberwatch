@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+  <h2>Graph Neighbors</h2>
+  <form id="graph-form">
+    <input type="number" id="asn" name="asn" placeholder="13335" required>
+    <button type="submit">Load neighbors</button>
+  </form>
+  <div id="graph-data"></div>
+</section>
+<script>
+  const apiBase = "{{ api_base }}";
+  const form = document.getElementById('graph-form');
+  const out = document.getElementById('graph-data');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const asn = document.getElementById('asn').value;
+    out.textContent = 'Loading...';
+    const res = await fetch(`${apiBase}/graph/neighbors/${asn}`);
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  });
+</script>
+{% endblock %}

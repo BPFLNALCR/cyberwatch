@@ -1,0 +1,14 @@
+aiohttp
+aioredis
+asyncpg
+pydantic
+rich
+neo4j-driver
+dnspython
+PyYAML
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+neo4j
+pandas

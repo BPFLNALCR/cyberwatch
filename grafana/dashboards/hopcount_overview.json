@@ -1,0 +1,51 @@
+{
+  "title": "Hopcount Overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "uid": "cyberWatch-hopcount",
+  "version": 1,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "DS",
+        "query": "postgres",
+        "current": { "text": "PostgreSQL", "value": "PostgreSQL" }
+      },
+      {
+        "type": "query",
+        "name": "target",
+        "datasource": "${DS}",
+        "query": "SELECT DISTINCT target_ip FROM targets ORDER BY target_ip",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "barchart",
+      "title": "Hop Count Distribution",
+      "datasource": "${DS}",
+      "targets": [
+        {
+          "format": "table",
+          "rawSql": "SELECT h.hop_number AS hop, COUNT(*) as count FROM hops h JOIN measurements m ON m.id=h.measurement_id JOIN targets t ON t.id=m.target_id WHERE t.target_ip = CASE WHEN '${target}' = '' THEN t.target_ip ELSE '${target}' END GROUP BY hop ORDER BY hop",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Hop Count Over Time",
+      "datasource": "${DS}",
+      "targets": [
+        {
+          "format": "time_series",
+          "rawSql": "SELECT m.started_at as time, COUNT(h.id) as value FROM measurements m JOIN hops h ON h.measurement_id=m.id JOIN targets t ON t.id=m.target_id WHERE t.target_ip = CASE WHEN '${target}' = '' THEN t.target_ip ELSE '${target}' END GROUP BY m.started_at ORDER BY time",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

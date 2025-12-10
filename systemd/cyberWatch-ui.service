@@ -1,0 +1,13 @@
+[Unit]
+Description=CyberWatch UI Service
+After=network.target cyberWatch-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT_DIR@
+ExecStart=@ROOT_DIR@/.venv/bin/uvicorn cyberWatch.ui.server:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+Environment=CYBERWATCH_API_BASE=http://localhost:8000
+
+[Install]
+WantedBy=multi-user.target

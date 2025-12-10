@@ -1,0 +1,15 @@
+[Unit]
+Description=cyberWatch DNS Target Collector
+After=network.target redis-server.service postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT_DIR@
+Environment=CYBERWATCH_PG_DSN=postgresql://postgres:postgres@localhost:5432/cyberWatch
+Environment=CYBERWATCH_REDIS_URL=redis://localhost:6379/0
+Environment=CYBERWATCH_DNS_CONFIG=/etc/cyberwatch/dns.yaml
+ExecStart=@ROOT_DIR@/.venv/bin/python -m cyberWatch.collector.dns_collector --config /etc/cyberwatch/dns.yaml
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

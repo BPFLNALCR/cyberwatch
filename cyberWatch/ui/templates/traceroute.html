@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+  <h2>Run Traceroute</h2>
+  <form id="trace-form">
+    <input type="text" id="target" name="target" placeholder="8.8.8.8" required>
+    <button type="submit">Run</button>
+  </form>
+  <pre id="trace-result"></pre>
+</section>
+<script>
+  const apiBase = "{{ api_base }}";
+  const form = document.getElementById('trace-form');
+  const out = document.getElementById('trace-result');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const target = document.getElementById('target').value;
+    out.textContent = 'Running traceroute...';
+    const res = await fetch(`${apiBase}/traceroute/run`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target})
+    });
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  });
+</script>
+{% endblock %}

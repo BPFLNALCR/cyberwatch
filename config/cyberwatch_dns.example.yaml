@@ -1,0 +1,26 @@
+enabled: true
+source: "pihole"  # or "logfile"
+
+pihole:
+  base_url: "http://pihole.local/admin/api.php"
+  api_token: "REPLACE_ME"
+  poll_interval_seconds: 30
+
+logfile:
+  log_path: "/var/log/pihole.log"
+  format: "pihole_ftl"
+  poll_interval_seconds: 10
+
+filters:
+  ignore_domains_suffix:
+    - ".local"
+    - ".lan"
+  ignore_qtypes:
+    - "PTR"
+  ignore_clients: []
+  max_domain_length: 255
+
+dns_resolution:
+  enabled: true
+  timeout_seconds: 2
+  max_ips_per_domain: 4
