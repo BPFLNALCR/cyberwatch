@@ -88,7 +88,7 @@ cd cyberwatch
 ./install-cyberWatch.sh
 ```
 3) Installer actions (from [install-cyberWatch.sh](install-cyberWatch.sh)):
-- Installs apt packages: python3.11/venv/pip, redis-server, postgresql-client, libpq-dev, traceroute, scamper, mtr-tiny, curl, jq.
+- Installs apt packages: python3, python3-venv, python3-pip, redis-server, postgresql-client, libpq-dev, traceroute, scamper, mtr-tiny, curl, jq.
 - Creates `.venv` and installs [cyberWatch/requirements.txt](cyberWatch/requirements.txt).
 - Optionally applies PostgreSQL schemas [cyberWatch/db/schema.sql](cyberWatch/db/schema.sql) and [cyberWatch/db/dns_schema.sql](cyberWatch/db/dns_schema.sql) to DSN `CYBERWATCH_PG_DSN` (default `postgresql://postgres:postgres@localhost:5432/cyberWatch`).
 - Installs DNS config to `/etc/cyberwatch/dns.yaml` from [config/cyberwatch_dns.example.yaml](config/cyberwatch_dns.example.yaml) if absent.

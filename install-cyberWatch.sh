@@ -53,7 +53,7 @@ require_debian() {
 }
 
 install_packages() {
-  local pkgs=(python3.11 python3.11-venv python3-pip redis-server postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq)
+  local pkgs=(python3 python3-venv python3-pip redis-server postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq)
   log "Installing system packages: ${pkgs[*]}"
   sudo apt-get update -y
   sudo apt-get install -y "${pkgs[@]}"
@@ -62,7 +62,7 @@ install_packages() {
 create_venv() {
   if [[ ! -d "$VENV_DIR" ]]; then
     log "Creating venv at $VENV_DIR"
-    python3.11 -m venv "$VENV_DIR"
+    python3 -m venv "$VENV_DIR"
   else
     log "Reusing existing venv at $VENV_DIR"
   fi

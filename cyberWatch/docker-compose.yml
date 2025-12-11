@@ -17,7 +17,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   worker:
-    image: python:3.11-slim
+    image: python:3-slim
     working_dir: /app
     volumes:
       - ./:/app
