@@ -15,8 +15,8 @@ DEFAULT_DSN="${CYBERWATCH_PG_DSN:-}"
 DNS_CONFIG_SRC="$ROOT_DIR/config/cyberwatch_dns.example.yaml"
 DNS_CONFIG_DEST="/etc/cyberwatch/dns.yaml"
 
-log() { printf "[cyberWatch] %s\n" "$*"; }
-warn() { printf "[cyberWatch][warn] %s\n" "$*"; }
+log() { printf "[cyberWatch] %s\n" "$*" >&2; }
+warn() { printf "[cyberWatch][warn] %s\n" "$*" >&2; }
 
 prompt_yes_no() {
   local prompt="$1" default_yes="$2" reply
@@ -122,8 +122,13 @@ ensure_postgresql_running() {
     warn "systemctl not found; cannot manage postgresql service automatically."
     return 0
   fi
+  # systemctl may exist but be non-functional (e.g., containers/WSL without systemd).
+  if ! systemctl list-unit-files >/dev/null 2>&1; then
+    warn "systemctl is not functional; cannot manage postgresql service automatically."
+    return 0
+  fi
   if ! systemctl list-unit-files | grep -q '^postgresql\.service'; then
-    warn "postgresql.service not found (is PostgreSQL installed?)."
+    warn "postgresql.service not found (is PostgreSQL installed and systemd managing services?)."
     return 0
   fi
   if ! sudo systemctl is-active --quiet postgresql.service; then
@@ -188,14 +193,14 @@ ensure_local_db_and_user() {
   fi
 
   log "Ensuring PostgreSQL role '$user' and database '$dbname' exist"
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname='${user}'" | grep -q 1 \
-    || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE \"${user}\" LOGIN PASSWORD '${password}'"
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname='${user}'" 2>/dev/null | grep -q 1 \
+    || sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "CREATE ROLE \"${user}\" LOGIN PASSWORD '${password}'" >/dev/null
 
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='${dbname}'" | grep -q 1 \
-    || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${dbname}\" OWNER \"${user}\""
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='${dbname}'" 2>/dev/null | grep -q 1 \
+    || sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "CREATE DATABASE \"${dbname}\" OWNER \"${user}\"" >/dev/null
 
   # Make sure the role owns the DB (safe to re-run).
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"${dbname}\" OWNER TO \"${user}\"" >/dev/null
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "ALTER DATABASE \"${dbname}\" OWNER TO \"${user}\"" >/dev/null
 
   # Export synthesized DSN for later persistence.
   printf '%s' "postgresql://${user}:${password}@${host:-localhost}:${port}/${dbname}"
@@ -265,10 +270,10 @@ apply_schema() {
     return 1
   fi
   log "Applying schema to $dsn"
-  PGPASSWORD="${PGPASSWORD:-}" psql "$dsn" -f "$SCHEMA_FILE"
+  PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 "$dsn" -f "$SCHEMA_FILE"
   if [[ -f "$DNS_SCHEMA_FILE" ]]; then
     log "Applying DNS schema to $dsn"
-    PGPASSWORD="${PGPASSWORD:-}" psql "$dsn" -f "$DNS_SCHEMA_FILE"
+    PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 "$dsn" -f "$DNS_SCHEMA_FILE"
   fi
 }
 
