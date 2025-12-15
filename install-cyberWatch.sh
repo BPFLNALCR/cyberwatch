@@ -193,8 +193,15 @@ ensure_local_db_and_user() {
   fi
 
   log "Ensuring PostgreSQL role '$user' and database '$dbname' exist"
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname='${user}'" 2>/dev/null | grep -q 1 \
-    || sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "CREATE ROLE \"${user}\" LOGIN PASSWORD '${password}'" >/dev/null
+  if sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname='${user}'" 2>/dev/null | grep -q 1; then
+    # If the role already exists, ensure it can authenticate with the provided password.
+    # Avoid touching the built-in 'postgres' role to reduce surprise.
+    if [[ -n "$password" && "$user" != "postgres" ]]; then
+      sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "ALTER ROLE \"${user}\" WITH LOGIN PASSWORD '${password}'" >/dev/null
+    fi
+  else
+    sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "CREATE ROLE \"${user}\" LOGIN PASSWORD '${password}'" >/dev/null
+  fi
 
   sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='${dbname}'" 2>/dev/null | grep -q 1 \
     || sudo -u postgres psql -v ON_ERROR_STOP=1 -q -c "CREATE DATABASE \"${dbname}\" OWNER \"${user}\"" >/dev/null
@@ -255,12 +262,6 @@ apply_schema() {
     warn "psql not found; skipping schema application."
     return
   fi
-  # If this is a local DSN, make sure the PostgreSQL server is installed/running.
-  local synthesized
-  synthesized="$(ensure_local_db_and_user "$dsn" || true)"
-  if [[ -n "$synthesized" ]]; then
-    dsn="$synthesized"
-  fi
   ensure_postgresql_running
   local info
   info="$(dsn_to_json "$dsn")"
@@ -270,10 +271,10 @@ apply_schema() {
     return 1
   fi
   log "Applying schema to $dsn"
-  PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 "$dsn" -f "$SCHEMA_FILE"
+  psql -v ON_ERROR_STOP=1 "$dsn" -f "$SCHEMA_FILE"
   if [[ -f "$DNS_SCHEMA_FILE" ]]; then
     log "Applying DNS schema to $dsn"
-    PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 "$dsn" -f "$DNS_SCHEMA_FILE"
+    psql -v ON_ERROR_STOP=1 "$dsn" -f "$DNS_SCHEMA_FILE"
   fi
 }
 
@@ -326,8 +327,14 @@ main() {
   if prompt_yes_no "Apply PostgreSQL schema now?" "y"; then
     read -r -p "PostgreSQL DSN [$dsn]: " input_dsn || true
       dsn=${input_dsn:-$dsn}
+    # If this is a local DSN, ensure the role/DB exist and keep credentials consistent.
+    local synthesized
+    synthesized="$(ensure_local_db_and_user "$dsn" || true)"
+    if [[ -n "$synthesized" ]]; then
+      dsn="$synthesized"
+    fi
     apply_schema "$dsn"
-    # Persist DSN for systemd services.
+    # Persist the final DSN for systemd services.
     write_env_file "$dsn"
   else
     log "Skipping schema application."
