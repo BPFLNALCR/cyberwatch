@@ -1,24 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
-<section>
-  <h2>Graph Neighbors</h2>
-  <form id="graph-form">
-    <input type="number" id="asn" name="asn" placeholder="13335" required>
-    <button type="submit">Load neighbors</button>
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Network topology</p>
+      <h2 class="cw-h2">Graph Neighbors</h2>
+    </div>
+    <div id="graph-status" class="cw-banner"></div>
+  </div>
+  <form id="graph-form" class="cw-form">
+    <label for="asn">ASN</label>
+    <div class="cw-input-row">
+      <input type="number" id="asn" name="asn" placeholder="13335" min="1" required>
+      <button type="submit">Load neighbors</button>
+    </div>
   </form>
-  <div id="graph-data"></div>
+  <div id="graph-data" class="cw-result"></div>
 </section>
+{% endblock %}
+
+{% block scripts %}
 <script>
-  const apiBase = "{{ api_base }}";
-  const form = document.getElementById('graph-form');
-  const out = document.getElementById('graph-data');
-  form.addEventListener('submit', async (e) => {
+  const graphForm = document.getElementById('graph-form');
+  const graphData = document.getElementById('graph-data');
+  const graphStatus = document.getElementById('graph-status');
+
+  function renderNeighbors(data) {
+    if (!data.neighbors || !data.neighbors.length) {
+      return '<p class="cw-muted">No neighbors found.</p>';
+    }
+    const chips = data.neighbors.map((n) => `<span class="cw-chip">AS${n}</span>`).join('');
+    return `<div class="cw-section"><h3>Neighbors of AS${data.asn}</h3><div class="cw-chip-row">${chips}</div></div>`;
+  }
+
+  graphForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const asn = document.getElementById('asn').value;
-    out.textContent = 'Loading...';
-    const res = await fetch(`${apiBase}/graph/neighbors/${asn}`);
-    const data = await res.json();
-    out.textContent = JSON.stringify(data, null, 2);
+    const asn = document.getElementById('asn').value.trim();
+    if (!asn) return;
+
+    showMessage(graphStatus, 'Loading...', 'info');
+    graphData.innerHTML = '';
+
+    try {
+      const data = await fetchJson(`/graph/neighbors/${asn}`);
+      showMessage(graphStatus, 'Loaded', 'success');
+      graphData.innerHTML = renderNeighbors(data);
+    } catch (err) {
+      showMessage(graphStatus, err.message || 'Failed to load neighbors', 'error');
+      graphData.innerHTML = '';
+    }
   });
 </script>
 {% endblock %}
