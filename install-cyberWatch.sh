@@ -9,7 +9,9 @@ REQ_FILE="$ROOT_DIR/cyberWatch/requirements.txt"
 SCHEMA_FILE="$ROOT_DIR/cyberWatch/db/schema.sql"
 DNS_SCHEMA_FILE="$ROOT_DIR/cyberWatch/db/dns_schema.sql"
 SYSTEMD_DIR="$ROOT_DIR/systemd"
-DEFAULT_DSN="${CYBERWATCH_PG_DSN:-postgresql://postgres:postgres@localhost:5432/cyberWatch}"
+ENV_DIR="/etc/cyberwatch"
+ENV_FILE_DEST="$ENV_DIR/cyberwatch.env"
+DEFAULT_DSN="${CYBERWATCH_PG_DSN:-}"
 DNS_CONFIG_SRC="$ROOT_DIR/config/cyberwatch_dns.example.yaml"
 DNS_CONFIG_DEST="/etc/cyberwatch/dns.yaml"
 
@@ -53,10 +55,180 @@ require_debian() {
 }
 
 install_packages() {
-  local pkgs=(python3 python3-venv python3-pip redis-server postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq)
+  # NOTE: postgresql-client alone is not sufficient; we need the server running for localhost schema application.
+  local pkgs=(python3 python3-venv python3-pip redis-server postgresql postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq)
   log "Installing system packages: ${pkgs[*]}"
   sudo apt-get update -y
   sudo apt-get install -y "${pkgs[@]}"
+}
+
+read_env_var() {
+  local file="$1" key="$2"
+  if ! sudo test -f "$file"; then
+    return 1
+  fi
+  # shellcheck disable=SC2002
+  sudo cat "$file" | awk -F= -v k="$key" '$1==k {sub(/^"|"$/, "", $2); print $2; exit}'
+}
+
+generate_password() {
+  python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(18))
+PY
+}
+
+dsn_to_json() {
+  local dsn="$1"
+  python3 - "$dsn" <<'PY'
+import json
+import sys
+from urllib.parse import urlparse, parse_qs, unquote
+
+dsn = sys.argv[1]
+u = urlparse(dsn)
+
+scheme = u.scheme
+if scheme not in ("postgresql", "postgres"):
+    # keep best-effort parsing
+    pass
+
+qs = parse_qs(u.query)
+
+user = u.username or (qs.get("user", [None])[0])
+password = u.password or (qs.get("password", [None])[0])
+host = u.hostname or ""
+port = u.port or int(qs.get("port", [5432])[0])
+
+dbname = (u.path or "").lstrip("/")
+if not dbname:
+    dbname = qs.get("dbname", [""])[0]
+
+info = {
+    "user": unquote(user) if user else "",
+    "password": unquote(password) if password else "",
+    "host": host,
+    "port": port,
+    "dbname": dbname,
+    "is_local": (host in ("", "localhost", "127.0.0.1", "::1")),
+}
+
+print(json.dumps(info))
+PY
+}
+
+ensure_postgresql_running() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl not found; cannot manage postgresql service automatically."
+    return 0
+  fi
+  if ! systemctl list-unit-files | grep -q '^postgresql\.service'; then
+    warn "postgresql.service not found (is PostgreSQL installed?)."
+    return 0
+  fi
+  if ! sudo systemctl is-active --quiet postgresql.service; then
+    log "Starting postgresql.service"
+    sudo systemctl enable postgresql.service >/dev/null 2>&1 || true
+    sudo systemctl start postgresql.service
+  fi
+}
+
+wait_for_postgres() {
+  local host="$1" port="$2"
+  if ! command -v pg_isready >/dev/null 2>&1; then
+    return 0
+  fi
+  local tries=20
+  while (( tries > 0 )); do
+    if [[ -n "$host" ]]; then
+      pg_isready -h "$host" -p "$port" >/dev/null 2>&1 && return 0
+    else
+      pg_isready >/dev/null 2>&1 && return 0
+    fi
+    sleep 0.5
+    tries=$((tries - 1))
+  done
+  return 1
+}
+
+ensure_local_db_and_user() {
+  local dsn="$1"
+  local info
+  info="$(dsn_to_json "$dsn")"
+
+  local host port user password dbname is_local
+  host="$(printf '%s' "$info" | jq -r '.host')"
+  port="$(printf '%s' "$info" | jq -r '.port')"
+  user="$(printf '%s' "$info" | jq -r '.user')"
+  password="$(printf '%s' "$info" | jq -r '.password')"
+  dbname="$(printf '%s' "$info" | jq -r '.dbname')"
+  is_local="$(printf '%s' "$info" | jq -r '.is_local')"
+
+  if [[ "$is_local" != "true" ]]; then
+    return 0
+  fi
+  if [[ -z "$dbname" ]]; then
+    warn "DSN does not include a database name; skipping DB/user bootstrap."
+    return 0
+  fi
+
+  ensure_postgresql_running
+  if ! wait_for_postgres "$host" "$port"; then
+    warn "PostgreSQL did not become ready in time."
+    return 1
+  fi
+
+  # If the DSN user is blank, default to a dedicated role.
+  if [[ -z "$user" || "$user" == "null" ]]; then
+    user="cyberwatch"
+  fi
+  if [[ -z "$password" || "$password" == "null" ]]; then
+    password="$(generate_password)"
+    # If the DSN had no password, we will update it later by writing ENV_FILE_DEST.
+  fi
+
+  log "Ensuring PostgreSQL role '$user' and database '$dbname' exist"
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname='${user}'" | grep -q 1 \
+    || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE \"${user}\" LOGIN PASSWORD '${password}'"
+
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='${dbname}'" | grep -q 1 \
+    || sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${dbname}\" OWNER \"${user}\""
+
+  # Make sure the role owns the DB (safe to re-run).
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"${dbname}\" OWNER TO \"${user}\"" >/dev/null
+
+  # Export synthesized DSN for later persistence.
+  printf '%s' "postgresql://${user}:${password}@${host:-localhost}:${port}/${dbname}"
+}
+
+write_env_file() {
+  local dsn="$1"
+  sudo mkdir -p "$ENV_DIR"
+
+  if sudo test -f "$ENV_FILE_DEST"; then
+    local existing
+    existing="$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)"
+    if [[ -n "$existing" && "$existing" == "$dsn" ]]; then
+      return 0
+    fi
+    if prompt_yes_no "Update $ENV_FILE_DEST with the selected DSN?" "y"; then
+      log "Updating $ENV_FILE_DEST"
+    else
+      log "Keeping existing $ENV_FILE_DEST"
+      return 0
+    fi
+  else
+    log "Creating $ENV_FILE_DEST"
+  fi
+
+  sudo tee "$ENV_FILE_DEST" >/dev/null <<EOF
+CYBERWATCH_PG_DSN="$dsn"
+CYBERWATCH_REDIS_URL="redis://localhost:6379/0"
+NEO4J_URI="bolt://localhost:7687"
+NEO4J_USER="neo4j"
+NEO4J_PASSWORD="neo4j"
+EOF
+  sudo chmod 0640 "$ENV_FILE_DEST" || true
 }
 
 create_venv() {
@@ -77,6 +249,20 @@ apply_schema() {
   if ! command -v psql >/dev/null 2>&1; then
     warn "psql not found; skipping schema application."
     return
+  fi
+  # If this is a local DSN, make sure the PostgreSQL server is installed/running.
+  local synthesized
+  synthesized="$(ensure_local_db_and_user "$dsn" || true)"
+  if [[ -n "$synthesized" ]]; then
+    dsn="$synthesized"
+  fi
+  ensure_postgresql_running
+  local info
+  info="$(dsn_to_json "$dsn")"
+  if ! wait_for_postgres "$(printf '%s' "$info" | jq -r '.host')" "$(printf '%s' "$info" | jq -r '.port')"; then
+    warn "PostgreSQL is not reachable; cannot apply schema."
+    warn "If using localhost, ensure 'postgresql' is installed and the service is running."
+    return 1
   fi
   log "Applying schema to $dsn"
   PGPASSWORD="${PGPASSWORD:-}" psql "$dsn" -f "$SCHEMA_FILE"
@@ -120,11 +306,24 @@ main() {
   install_packages
   create_venv
 
+  # Prefer persisted DSN (used by systemd units) if present.
+  if [[ -z "$DEFAULT_DSN" ]]; then
+    DEFAULT_DSN="$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)"
+  fi
+  if [[ -z "$DEFAULT_DSN" ]]; then
+    # Secure-ish default: create a dedicated local role and generate a password.
+    local pw
+    pw="$(generate_password)"
+    DEFAULT_DSN="postgresql://cyberwatch:${pw}@localhost:5432/cyberWatch"
+  fi
+
   local dsn="$DEFAULT_DSN"
   if prompt_yes_no "Apply PostgreSQL schema now?" "y"; then
     read -r -p "PostgreSQL DSN [$dsn]: " input_dsn || true
       dsn=${input_dsn:-$dsn}
     apply_schema "$dsn"
+    # Persist DSN for systemd services.
+    write_env_file "$dsn"
   else
     log "Skipping schema application."
   fi
