@@ -55,11 +55,18 @@ maybe_drop_tables() {
     return
   fi
   local dsn="$DEFAULT_DSN"
+  local pgpass="${PGPASSWORD:-}"
   if prompt_yes_no "Drop cyberWatch tables?" "n"; then
     read -r -p "PostgreSQL DSN [$dsn]: " input_dsn || true
     dsn=${input_dsn:-$dsn}
+    if [[ -z "$pgpass" ]]; then
+      read -r -s -p "PostgreSQL password (optional, Enter to skip): " pgpass || true
+      echo
+    fi
     log "Dropping tables on $dsn"
-    PGPASSWORD="${PGPASSWORD:-}" psql "$dsn" -c "DROP TABLE IF EXISTS dns_queries, dns_targets, hops, measurements, targets CASCADE;"
+    if ! PGPASSWORD="$pgpass" psql "$dsn" -c "DROP TABLE IF EXISTS dns_queries, dns_targets, hops, measurements, targets CASCADE;"; then
+      warn "Failed to drop tables. Check credentials/DSN and try again."
+    fi
   fi
 }
 
