@@ -26,7 +26,7 @@ sanitize_dsn() {
   dsn="${dsn#${dsn%%[![:space:]]*}}"   # trim leading space
   dsn="${dsn%${dsn##*[![:space:]]}}"   # trim trailing space
   dsn="${dsn%]}"                       # strip accidental trailing bracket
-  dsn="${dsn%"}"; dsn="${dsn#"}"    # strip surrounding quotes
+  dsn="${dsn%\"}"; dsn="${dsn#\"}"    # strip surrounding quotes
   dsn="${dsn%\'}"; dsn="${dsn#\'}"  # strip surrounding single quotes
   printf '%s' "$dsn"
 }
