@@ -71,6 +71,19 @@ read_env_var() {
   sudo cat "$file" | awk -F= -v k="$key" '$1==k {sub(/^"|"$/, "", $2); print $2; exit}'
 }
 
+sanitize_dsn() {
+  # Trim whitespace and strip surrounding single/double quotes to avoid accidental trailing quotes in DSNs.
+  local dsn="$1"
+  # trim leading
+  dsn="${dsn#${dsn%%[![:space:]]*}}"
+  # trim trailing
+  dsn="${dsn%${dsn##*[![:space:]]}}"
+  # remove surrounding quotes repeatedly
+  while [[ "$dsn" == "\""*"\"" && "$dsn" != "" ]]; do dsn="${dsn#\"}"; dsn="${dsn%\"}"; done
+  while [[ "$dsn" == "'"*"'" && "$dsn" != "" ]]; do dsn="${dsn#\'}"; dsn="${dsn%\'}"; done
+  printf '%s' "$dsn"
+}
+
 generate_password() {
   python3 - <<'PY'
 import secrets
@@ -157,7 +170,8 @@ wait_for_postgres() {
 }
 
 ensure_local_db_and_user() {
-  local dsn="$1"
+  local dsn
+  dsn="$(sanitize_dsn "$1")"
   local info
   info="$(dsn_to_json "$dsn")"
 
@@ -214,12 +228,13 @@ ensure_local_db_and_user() {
 }
 
 write_env_file() {
-  local dsn="$1"
+  local dsn
+  dsn="$(sanitize_dsn "$1")"
   sudo mkdir -p "$ENV_DIR"
 
   if sudo test -f "$ENV_FILE_DEST"; then
     local existing
-    existing="$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)"
+    existing="$(sanitize_dsn "$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)")"
     if [[ -n "$existing" && "$existing" == "$dsn" ]]; then
       return 0
     fi
@@ -257,7 +272,8 @@ create_venv() {
 }
 
 apply_schema() {
-  local dsn="$1"
+  local dsn
+  dsn="$(sanitize_dsn "$1")"
   if ! command -v psql >/dev/null 2>&1; then
     warn "psql not found; skipping schema application."
     return
@@ -314,7 +330,9 @@ main() {
 
   # Prefer persisted DSN (used by systemd units) if present.
   if [[ -z "$DEFAULT_DSN" ]]; then
-    DEFAULT_DSN="$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)"
+    DEFAULT_DSN="$(sanitize_dsn "$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)")"
+  else
+    DEFAULT_DSN="$(sanitize_dsn "$DEFAULT_DSN")"
   fi
   if [[ -z "$DEFAULT_DSN" ]]; then
     # Secure-ish default: create a dedicated local role and generate a password.
@@ -327,6 +345,7 @@ main() {
   if prompt_yes_no "Apply PostgreSQL schema now?" "y"; then
     read -r -p "PostgreSQL DSN [$dsn]: " input_dsn || true
       dsn=${input_dsn:-$dsn}
+      dsn="$(sanitize_dsn "$dsn")"
     # If this is a local DSN, ensure the role/DB exist and keep credentials consistent.
     local synthesized
     synthesized="$(ensure_local_db_and_user "$dsn" || true)"
