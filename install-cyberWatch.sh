@@ -277,6 +277,8 @@ create_venv() {
   # shellcheck source=/dev/null
   source "$VENV_DIR/bin/activate"
   pip install --upgrade pip
+  # Remove deprecated aioredis if present (replaced by redis package with async support)
+  pip uninstall aioredis -y 2>/dev/null || true
   pip install -r "$REQ_FILE"
 }
 

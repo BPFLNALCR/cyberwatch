@@ -5,7 +5,7 @@ from typing import Optional
 import json
 import os
 
-import aioredis
+import redis.asyncio as aioredis
 from pydantic import BaseModel, Field, IPvAnyAddress
 
 

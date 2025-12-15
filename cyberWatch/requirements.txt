@@ -1,5 +1,5 @@
 aiohttp
-aioredis
+redis
 asyncpg
 pydantic
 rich

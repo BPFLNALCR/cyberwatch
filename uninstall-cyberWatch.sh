@@ -15,9 +15,9 @@ warn() { printf "[cyberWatch][warn] %s\n" "$*"; }
 
 read_env_var() {
   local file="$1" key="$2"
-  if [[ -f "$file" ]]; then
+  if sudo test -f "$file"; then
     # shellcheck disable=SC2002
-    cat "$file" | awk -F= -v k="$key" '$1==k {sub(/^"|"$/, "", $2); print $2; exit}'
+    sudo cat "$file" | awk -F= -v k="$key" '$1==k {sub(/^"|"$/, "", $2); print $2; exit}'
   fi
 }
 
