@@ -1,6 +1,202 @@
-body { font-family: Arial, sans-serif; margin: 0; padding: 0 1.5rem; }
-header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 0; }
-nav a { margin-right: 1rem; text-decoration: none; color: #0366d6; }
-main { max-width: 960px; margin: 0 auto; }
-form { margin: 1rem 0; }
-pre { background: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto; }
+* { box-sizing: border-box; }
+body {
+	margin: 0;
+	padding: 0;
+	font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+	background: radial-gradient(circle at 20% 20%, #121826, #0b0f19 45%);
+	color: #e8ecf5;
+	min-height: 100vh;
+}
+
+.cw-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 1.25rem 2rem;
+	position: sticky;
+	top: 0;
+	background: rgba(10, 14, 26, 0.9);
+	backdrop-filter: blur(10px);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+	z-index: 10;
+}
+
+.cw-brand { display: flex; align-items: center; gap: 0.75rem; }
+.cw-dot {
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: linear-gradient(120deg, #7cf3ff, #9f7fff);
+	box-shadow: 0 0 18px rgba(124, 243, 255, 0.7);
+}
+.cw-title { font-weight: 700; letter-spacing: 0.02em; }
+.cw-subtitle { font-size: 0.8rem; color: #9fb3d1; }
+
+.cw-nav { display: flex; align-items: center; gap: 1rem; }
+.cw-nav a {
+	color: #e8ecf5;
+	text-decoration: none;
+	padding: 0.45rem 0.8rem;
+	border-radius: 8px;
+	transition: background 0.2s ease, color 0.2s ease;
+}
+.cw-nav a:hover { background: rgba(255, 255, 255, 0.06); color: #fff; }
+
+.cw-page {
+	max-width: 1100px;
+	margin: 0 auto;
+	padding: 2rem;
+	display: grid;
+	gap: 1.5rem;
+}
+
+.cw-card {
+	background: linear-gradient(145deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 18px;
+	padding: 1.5rem;
+	box-shadow: 0 20px 45px rgba(0, 0, 0, 0.3);
+}
+
+.cw-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	gap: 1rem;
+	margin-top: 1rem;
+}
+
+.cw-tile {
+	background: rgba(255, 255, 255, 0.03);
+	border: 1px solid rgba(255, 255, 255, 0.06);
+	border-radius: 12px;
+	padding: 0.9rem 1rem;
+}
+
+.cw-tile-value {
+	font-size: 1.15rem;
+	font-weight: 700;
+	margin: 0.15rem 0;
+}
+
+.cw-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.25rem 0.65rem;
+	border-radius: 999px;
+	font-size: 0.9rem;
+}
+
+.cw-pill-ok { background: rgba(61, 214, 142, 0.18); color: #c3f0d5; }
+.cw-pill-bad { background: rgba(246, 109, 109, 0.18); color: #ffd7d7; }
+
+.cw-card-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.cw-eyebrow { margin: 0; letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.75rem; color: #8aa5c1; }
+.cw-h2 { margin: 0.15rem 0 0; font-size: 1.6rem; }
+
+.cw-form { display: grid; gap: 0.5rem; margin-top: 1rem; }
+.cw-form label { color: #c8d5ec; font-size: 0.95rem; }
+
+.cw-input-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.cw-input-row input {
+	flex: 1;
+	min-width: 220px;
+	padding: 0.75rem 0.9rem;
+	border-radius: 10px;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: rgba(255, 255, 255, 0.04);
+	color: #e8ecf5;
+}
+.cw-input-row input:focus { outline: 2px solid #7cf3ff; outline-offset: 1px; }
+
+.cw-input-row button {
+	padding: 0.78rem 1.2rem;
+	border: none;
+	border-radius: 10px;
+	background: linear-gradient(135deg, #7cf3ff, #9f7fff);
+	color: #0b0f19;
+	font-weight: 700;
+	cursor: pointer;
+	min-width: 110px;
+	transition: transform 0.08s ease, box-shadow 0.2s ease;
+}
+.cw-input-row button:hover { box-shadow: 0 10px 30px rgba(159, 127, 255, 0.3); }
+.cw-input-row button:active { transform: translateY(1px); }
+
+.cw-banner {
+	min-height: 32px;
+	padding: 0.35rem 0.75rem;
+	border-radius: 10px;
+	font-size: 0.9rem;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid rgba(255, 255, 255, 0.07);
+	color: #cbd7ec;
+}
+.cw-success { background: rgba(61, 214, 142, 0.16); border-color: rgba(61, 214, 142, 0.4); color: #c3f0d5; }
+.cw-error { background: rgba(246, 109, 109, 0.14); border-color: rgba(246, 109, 109, 0.5); color: #ffd7d7; }
+.cw-info { background: rgba(124, 243, 255, 0.12); border-color: rgba(124, 243, 255, 0.4); color: #d7f8ff; }
+
+.cw-result { margin-top: 1rem; display: grid; gap: 0.75rem; }
+.cw-meta { display: flex; gap: 0.6rem; color: #9fb3d1; font-size: 0.95rem; flex-wrap: wrap; }
+.cw-meta span { background: rgba(255, 255, 255, 0.04); padding: 0.35rem 0.7rem; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06); }
+
+.cw-hop-list { display: grid; gap: 0.35rem; }
+.cw-hop {
+	display: grid;
+	grid-template-columns: 40px 1fr 120px;
+	align-items: center;
+	padding: 0.55rem 0.75rem;
+	background: rgba(255, 255, 255, 0.03);
+	border: 1px solid rgba(255, 255, 255, 0.05);
+	border-radius: 10px;
+}
+.cw-hop-num {
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 8px;
+	background: rgba(124, 243, 255, 0.15);
+	color: #7cf3ff;
+	font-weight: 700;
+}
+
+.cw-raw summary { cursor: pointer; color: #9f7fff; }
+.cw-raw pre {
+	margin-top: 0.6rem;
+	background: #0a0e19;
+	border: 1px solid rgba(255, 255, 255, 0.05);
+	border-radius: 10px;
+	padding: 0.75rem;
+	color: #cbd7ec;
+	overflow-x: auto;
+}
+
+.cw-chip-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cw-chip {
+	padding: 0.35rem 0.65rem;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.06);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	color: #e8ecf5;
+	font-size: 0.9rem;
+}
+
+.cw-chip-link {
+	border: 1px solid rgba(124, 243, 255, 0.4);
+	background: rgba(124, 243, 255, 0.12);
+	cursor: pointer;
+}
+
+.cw-section h3 { margin: 0 0 0.35rem; font-size: 1.05rem; }
+.cw-body { margin: 0.25rem 0 0.5rem; color: #e8ecf5; }
+.cw-muted { color: #8aa5c1; margin: 0; }
+.small { font-size: 0.85rem; }
+
+@media (max-width: 720px) {
+	.cw-header { padding: 1rem 1.25rem; }
+	.cw-page { padding: 1.25rem; }
+	.cw-hop { grid-template-columns: 36px 1fr; gap: 0.5rem; }
+	.cw-hop span:last-child { justify-self: end; }
+}

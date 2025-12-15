@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from neo4j import AsyncDriver
 
 from cyberWatch.api.models import ok
 from cyberWatch.api.utils.db import neo4j_dep
 
 router = APIRouter(prefix="/asn", tags=["asn"])
+
+
+def _http_error(code: int, message: str) -> None:
+    raise HTTPException(status_code=code, detail={"status": "error", "message": message})
 
 
 async def _fetch_asn(driver: AsyncDriver, asn: int) -> dict:
@@ -34,5 +38,10 @@ async def _fetch_asn(driver: AsyncDriver, asn: int) -> dict:
 
 @router.get("/{asn}")
 async def get_asn(asn: int, driver: AsyncDriver = Depends(neo4j_dep)):
-    data = await _fetch_asn(driver, asn)
+    try:
+        data = await _fetch_asn(driver, asn)
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        _http_error(status.HTTP_500_INTERNAL_SERVER_ERROR, f"ASN lookup failed: {exc}")
     return ok(data)

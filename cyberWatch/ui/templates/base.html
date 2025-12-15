@@ -3,20 +3,72 @@
 <head>
   <meta charset="utf-8">
   <title>CyberWatch</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-  <header>
-    <h1>CyberWatch Looking Glass</h1>
-    <nav>
+  <header class="cw-header">
+    <div class="cw-brand">
+      <span class="cw-dot"></span>
+      <div>
+        <div class="cw-title">CyberWatch</div>
+        <div class="cw-subtitle">Looking Glass</div>
+      </div>
+    </div>
+    <nav class="cw-nav">
       <a href="/">Home</a>
       <a href="/traceroute">Traceroute</a>
       <a href="/asn">ASN Explorer</a>
       <a href="/graph">Graph View</a>
     </nav>
   </header>
-  <main>
+  <main class="cw-page">
     {% block content %}{% endblock %}
   </main>
+  <script>
+    const apiBase = "{{ api_base }}";
+
+    async function fetchJson(path, options = {}) {
+      const controller = new AbortController();
+      const timeoutMs = options.timeoutMs ?? 15000;
+      const headers = options.headers || {};
+      if (options.body && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(`${apiBase}${path}`, {
+          ...options,
+          headers,
+          signal: controller.signal,
+        });
+
+        const contentType = res.headers.get("content-type") || "";
+        const parseJson = contentType.includes("application/json");
+        const payload = parseJson ? await res.json() : await res.text();
+
+        if (!res.ok) {
+          const message = payload?.detail || payload?.message || res.statusText;
+          throw new Error(message);
+        }
+
+        if (payload?.status && payload.status !== "ok") {
+          const message = payload.detail || payload.message || "Request failed";
+          throw new Error(message);
+        }
+
+        return payload?.data ?? payload;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function showMessage(target, message, kind = "info") {
+      target.className = `cw-banner cw-${kind}`;
+      target.textContent = message;
+    }
+  </script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

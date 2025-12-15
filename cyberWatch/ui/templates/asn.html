@@ -1,24 +1,72 @@
 {% extends "base.html" %}
 {% block content %}
-<section>
-  <h2>ASN Explorer</h2>
-  <form id="asn-form">
-    <input type="number" id="asn" name="asn" placeholder="13335" required>
-    <button type="submit">Lookup</button>
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Autonomous system intel</p>
+      <h2 class="cw-h2">ASN Explorer</h2>
+    </div>
+    <div id="asn-status" class="cw-banner"></div>
+  </div>
+  <form id="asn-form" class="cw-form">
+    <label for="asn">ASN</label>
+    <div class="cw-input-row">
+      <input type="number" id="asn" name="asn" placeholder="13335" min="1" required>
+      <button type="submit">Lookup</button>
+    </div>
   </form>
-  <pre id="asn-result"></pre>
+  <div id="asn-result" class="cw-result"></div>
 </section>
+{% endblock %}
+
+{% block scripts %}
 <script>
-  const apiBase = "{{ api_base }}";
-  const form = document.getElementById('asn-form');
-  const out = document.getElementById('asn-result');
-  form.addEventListener('submit', async (e) => {
+  const asnForm = document.getElementById("asn-form");
+  const asnResult = document.getElementById("asn-result");
+  const asnStatus = document.getElementById("asn-status");
+
+  function renderList(items) {
+    if (!items || !items.length) {
+      return "<p class=\"cw-muted\">No data.</p>";
+    }
+    return `<div class=\"cw-chip-row\">${items.map((i) => `<span class=\"cw-chip\">${i}</span>`).join("")}</div>`;
+  }
+
+  function renderAsn(data) {
+    const header = `<div class=\"cw-meta\"><span>AS${data.asn}</span><span>${data.country || "Unknown"}</span></div>`;
+    const org = `<p class=\"cw-body\">${data.org_name || "No org name"}</p>`;
+    const neighbors = `<div class=\"cw-section\"><h3>Neighbors</h3>${renderList(data.neighbors)}</div>`;
+    const prefixes = `<div class=\"cw-section\"><h3>Prefixes</h3>${renderList(data.prefixes)}</div>`;
+    return header + org + neighbors + prefixes;
+  }
+
+  asnForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const asn = document.getElementById('asn').value;
-    out.textContent = 'Fetching...';
-    const res = await fetch(`${apiBase}/asn/${asn}`);
-    const data = await res.json();
-    out.textContent = JSON.stringify(data, null, 2);
+    const asn = document.getElementById("asn").value.trim();
+    if (!asn) {
+      return;
+    }
+
+    showMessage(asnStatus, "Fetching...", "info");
+    asnResult.innerHTML = "";
+
+    try {
+      const data = await fetchJson(`/asn/${asn}`);
+      showMessage(asnStatus, "Loaded", "success");
+      asnResult.innerHTML = renderAsn(data);
+    } catch (err) {
+      showMessage(asnStatus, err.message || "Lookup failed", "error");
+      asnResult.innerHTML = "";
+    }
   });
+
+  (function preloadFromQuery() {
+    const params = new URLSearchParams(window.location.search);
+    const prefill = params.get("asn");
+    if (prefill) {
+      document.getElementById("asn").value = prefill;
+      asnForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    }
+  })();
 </script>
 {% endblock %}

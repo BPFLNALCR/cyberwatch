@@ -1,10 +1,76 @@
 {% extends "base.html" %}
 {% block content %}
-<section>
-  <h2>System Overview</h2>
-  <p>Use the navigation to run traceroutes, explore ASNs, or inspect graph neighbors.</p>
-  <ul>
-    <li>API base: {{ api_base }}</li>
-  </ul>
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Environment</p>
+      <h2 class="cw-h2">System Overview</h2>
+    </div>
+    <div id="health-status" class="cw-banner"></div>
+  </div>
+  <p class="cw-body">Use the navigation to run traceroutes, explore ASNs, or inspect graph neighbors.</p>
+  <div class="cw-meta" id="api-meta"></div>
+
+  <div class="cw-grid">
+    <div class="cw-tile">
+      <p class="cw-muted">Traceroute tool</p>
+      <div id="health-trace" class="cw-tile-value">—</div>
+      <div id="health-trace-msg" class="cw-muted small"></div>
+    </div>
+    <div class="cw-tile">
+      <p class="cw-muted">PostgreSQL</p>
+      <div id="health-pg" class="cw-tile-value">—</div>
+      <div id="health-pg-msg" class="cw-muted small"></div>
+    </div>
+    <div class="cw-tile">
+      <p class="cw-muted">Neo4j</p>
+      <div id="health-neo4j" class="cw-tile-value">—</div>
+      <div id="health-neo4j-msg" class="cw-muted small"></div>
+    </div>
+  </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const healthStatus = document.getElementById("health-status");
+  const apiMeta = document.getElementById("api-meta");
+
+  function setTile(elValue, elMsg, ok, text) {
+    elValue.textContent = ok ? "OK" : "Issue";
+    elValue.className = ok ? "cw-pill cw-pill-ok" : "cw-pill cw-pill-bad";
+    elMsg.textContent = text || "";
+  }
+
+  async function loadHealth() {
+    showMessage(healthStatus, "Checking...", "info");
+    try {
+      const data = await fetchJson("/health");
+      showMessage(healthStatus, "Healthy", "success");
+      apiMeta.innerHTML = `<span>API base: ${data.api_base}</span>`;
+      setTile(
+        document.getElementById("health-trace"),
+        document.getElementById("health-trace-msg"),
+        data.traceroute.available,
+        data.traceroute.message
+      );
+      setTile(
+        document.getElementById("health-pg"),
+        document.getElementById("health-pg-msg"),
+        data.postgres.ok,
+        data.postgres.message
+      );
+      setTile(
+        document.getElementById("health-neo4j"),
+        document.getElementById("health-neo4j-msg"),
+        data.neo4j.ok,
+        data.neo4j.message
+      );
+    } catch (err) {
+      showMessage(healthStatus, err.message || "Health check failed", "error");
+    }
+  }
+
+  loadHealth();
+</script>
 {% endblock %}

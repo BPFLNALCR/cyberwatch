@@ -1,28 +1,93 @@
 {% extends "base.html" %}
 {% block content %}
-<section>
-  <h2>Run Traceroute</h2>
-  <form id="trace-form">
-    <input type="text" id="target" name="target" placeholder="8.8.8.8" required>
-    <button type="submit">Run</button>
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Network path debugging</p>
+      <h2 class="cw-h2">Traceroute</h2>
+    </div>
+    <div id="trace-status" class="cw-banner"></div>
+  </div>
+  <form id="trace-form" class="cw-form">
+    <label for="target">Target IP or host</label>
+    <div class="cw-input-row">
+      <input type="text" id="target" name="target" placeholder="8.8.8.8" required>
+      <button type="submit">Run</button>
+    </div>
   </form>
-  <pre id="trace-result"></pre>
+  <div id="trace-result" class="cw-result"></div>
 </section>
+{% endblock %}
+
+{% block scripts %}
 <script>
-  const apiBase = "{{ api_base }}";
-  const form = document.getElementById('trace-form');
-  const out = document.getElementById('trace-result');
-  form.addEventListener('submit', async (e) => {
+  const traceForm = document.getElementById("trace-form");
+  const traceResult = document.getElementById("trace-result");
+  const traceStatus = document.getElementById("trace-status");
+
+  function renderHops(hops) {
+    if (!hops || !hops.length) {
+      return "<p class=\"cw-muted\">No hops returned.</p>";
+    }
+    const rows = hops.map((hop) => {
+      const ip = hop.ip || "*";
+      const rtt = hop.rtt_ms != null ? `${hop.rtt_ms.toFixed(2)} ms` : "--";
+      return `<div class=\"cw-hop\"><span class=\"cw-hop-num\">${hop.hop}</span><span>${ip}</span><span>${rtt}</span></div>`;
+    }).join("");
+    return `<div class=\"cw-hop-list\">${rows}</div>`;
+  }
+
+  function renderTrace(data) {
+    const meta = `<div class=\"cw-meta\"><span>Tool: ${data.tool}</span><span>Success: ${data.success ? "yes" : "no"}</span></div>`;
+    const hops = renderHops(data.hops);
+      const asns = renderAsnHints(data.asn_hints || []);
+    const raw = data.raw_output ? `<details class=\"cw-raw\"><summary>Raw output</summary><pre>${data.raw_output}</pre></details>` : "";
+      return meta + asns + hops + raw;
+  }
+
+    function renderAsnHints(asns) {
+      if (!asns.length) {
+        return "";
+      }
+      const chips = asns.map((asn) => `<button class=\"cw-chip cw-chip-link\" data-asn=\"${asn}\">AS${asn}</button>`).join("");
+      return `<div class=\"cw-section\"><h3>ASNs seen</h3><div class=\"cw-chip-row\" id=\"asn-hints\">${chips}</div></div>`;
+    }
+
+  traceForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const target = document.getElementById('target').value;
-    out.textContent = 'Running traceroute...';
-    const res = await fetch(`${apiBase}/traceroute/run`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({target})
-    });
-    const data = await res.json();
-    out.textContent = JSON.stringify(data, null, 2);
+    const target = document.getElementById("target").value.trim();
+    if (!target) {
+      return;
+    }
+
+    showMessage(traceStatus, "Running traceroute...", "info");
+    traceResult.innerHTML = "";
+
+    try {
+      const data = await fetchJson("/traceroute/run", {
+        method: "POST",
+        body: JSON.stringify({ target }),
+      });
+      showMessage(traceStatus, "Completed", "success");
+      traceResult.innerHTML = renderTrace(data);
+        attachAsnHintHandlers();
+    } catch (err) {
+      showMessage(traceStatus, err.message || "Traceroute failed", "error");
+      traceResult.innerHTML = "";
+    }
   });
+
+      function attachAsnHintHandlers() {
+        const container = document.getElementById("asn-hints");
+        if (!container) return;
+        container.querySelectorAll("button[data-asn]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const asn = btn.getAttribute("data-asn");
+            if (asn) {
+              window.location.href = `/asn?asn=${asn}`;
+            }
+          });
+        });
+      }
 </script>
 {% endblock %}

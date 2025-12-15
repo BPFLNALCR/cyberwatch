@@ -6,7 +6,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from cyberWatch.api.routes import measurements, traceroute, targets, asn, graph, dns
+from cyberWatch.api.routes import measurements, traceroute, targets, asn, graph, dns, health
 from cyberWatch.api.utils import db
 
 app = FastAPI(title="cyberWatch-api", version="0.1.0")
@@ -25,6 +25,7 @@ app.include_router(targets.router)
 app.include_router(asn.router)
 app.include_router(graph.router)
 app.include_router(dns.router)
+app.include_router(health.router)
 
 
 @app.on_event("startup")
