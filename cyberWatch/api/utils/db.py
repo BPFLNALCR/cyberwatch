@@ -1,12 +1,20 @@
-"""API-scoped database and driver utilities."""
+"""API-scoped database and driver utilities.
+
+Start failures were caused by hard dependencies on Postgres and Neo4j. We now
+try to create these connections opportunistically and downgrade to 503s at
+request time instead of crashing the process during startup.
+"""
 from __future__ import annotations
 
+import logging
 import os
 from typing import AsyncGenerator, Optional
 
 import asyncpg
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from neo4j import AsyncDriver, AsyncGraphDatabase
+
+logger = logging.getLogger(__name__)
 
 def _clean(val: str | None, default: str) -> str:
     if not val:
@@ -25,12 +33,22 @@ _driver: Optional[AsyncDriver] = None
 
 
 async def init_resources() -> None:
-    """Initialize shared database resources."""
+    """Initialize shared database resources without failing app startup."""
     global _pool, _driver
+
     if _pool is None:
-        _pool = await asyncpg.create_pool(PG_DSN)
+        try:
+            _pool = await asyncpg.create_pool(PG_DSN)
+        except Exception as exc:  # pragma: no cover - connection bootstrap
+            logger.warning("PostgreSQL pool init failed: %s", exc)
+            _pool = None
+
     if _driver is None:
-        _driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        try:
+            _driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        except Exception as exc:  # pragma: no cover - connection bootstrap
+            logger.warning("Neo4j driver init failed: %s", exc)
+            _driver = None
 
 
 async def close_resources() -> None:
@@ -47,12 +65,14 @@ async def close_resources() -> None:
 async def pg_dep() -> asyncpg.Pool:
     if _pool is None:
         await init_resources()
-    assert _pool is not None
+    if _pool is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="PostgreSQL unavailable")
     return _pool
 
 
 async def neo4j_dep() -> AsyncDriver:
     if _driver is None:
         await init_resources()
-    assert _driver is not None
+    if _driver is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j unavailable")
     return _driver

@@ -4,13 +4,45 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 SCHEMA_FILE="$ROOT_DIR/cyberWatch/db/schema.sql"
-DEFAULT_DSN="${CYBERWATCH_PG_DSN:-postgresql://postgres:postgres@localhost:5432/cyberWatch}"
+ENV_FILE="/etc/cyberwatch/cyberwatch.env"
+DEFAULT_DSN="${CYBERWATCH_PG_DSN:-}"
 PURGE_PACKAGES="no"
 SYSTEMD_UNITS=(cyberWatch-api.service cyberWatch-ui.service cyberWatch-enrichment.service cyberWatch-dns-collector.service)
 DNS_CONFIG_DEST="/etc/cyberwatch/dns.yaml"
 
 log() { printf "[cyberWatch] %s\n" "$*"; }
 warn() { printf "[cyberWatch][warn] %s\n" "$*"; }
+
+read_env_var() {
+  local file="$1" key="$2"
+  if [[ -f "$file" ]]; then
+    # shellcheck disable=SC2002
+    cat "$file" | awk -F= -v k="$key" '$1==k {sub(/^"|"$/, "", $2); print $2; exit}'
+  fi
+}
+
+sanitize_dsn() {
+  local dsn="$1"
+  dsn="${dsn#${dsn%%[![:space:]]*}}"   # trim leading space
+  dsn="${dsn%${dsn##*[![:space:]]}}"   # trim trailing space
+  dsn="${dsn%]}"                       # strip accidental trailing bracket
+  dsn="${dsn%"}"; dsn="${dsn#"}"    # strip surrounding quotes
+  dsn="${dsn%\'}"; dsn="${dsn#\'}"  # strip surrounding single quotes
+  printf '%s' "$dsn"
+}
+
+dsn_password() {
+  local dsn
+  dsn="$(sanitize_dsn "$1")"
+  python3 - "$dsn" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+dsn = sys.argv[1]
+u = urlparse(dsn)
+print(u.password or "")
+PY
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,11 +86,21 @@ maybe_drop_tables() {
     warn "psql not found; skipping DB drop."
     return
   fi
-  local dsn="$DEFAULT_DSN"
+  local dsn
+  dsn=$(sanitize_dsn "${DEFAULT_DSN:-}")
+  if [[ -z "$dsn" ]]; then
+    dsn=$(sanitize_dsn "$(read_env_var "$ENV_FILE" "CYBERWATCH_PG_DSN" || true)")
+  fi
+  if [[ -z "$dsn" ]]; then
+    dsn="postgresql://postgres:postgres@localhost:5432/cyberWatch"
+  fi
   local pgpass="${PGPASSWORD:-}"
   if prompt_yes_no "Drop cyberWatch tables?" "n"; then
     read -r -p "PostgreSQL DSN [$dsn]: " input_dsn || true
-    dsn=${input_dsn:-$dsn}
+    dsn=$(sanitize_dsn "${input_dsn:-$dsn}")
+    if [[ -z "$pgpass" ]]; then
+      pgpass=$(dsn_password "$dsn")
+    fi
     if [[ -z "$pgpass" ]]; then
       read -r -s -p "PostgreSQL password (optional, Enter to skip): " pgpass || true
       echo
