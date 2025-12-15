@@ -81,6 +81,10 @@ sanitize_dsn() {
   # remove surrounding quotes repeatedly
   while [[ "$dsn" == "\""*"\"" && "$dsn" != "" ]]; do dsn="${dsn#\"}"; dsn="${dsn%\"}"; done
   while [[ "$dsn" == "'"*"'" && "$dsn" != "" ]]; do dsn="${dsn#\'}"; dsn="${dsn%\'}"; done
+  # if there is a dangling trailing quote/bracket, drop it
+  if [[ "$dsn" == *"\"" && "$dsn" != "" ]]; then dsn="${dsn%\"}"; fi
+  if [[ "$dsn" == *"'" && "$dsn" != "" ]]; then dsn="${dsn%\'}"; fi
+  if [[ "$dsn" == *"]" && "$dsn" != "" ]]; then dsn="${dsn%]}"; fi
   printf '%s' "$dsn"
 }
 
