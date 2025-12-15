@@ -3,19 +3,30 @@
 <section class="cw-card">
   <div class="cw-card-header">
     <div>
-      <p class="cw-eyebrow">Network path debugging</p>
+      <p class="cw-eyebrow">Network Path Analysis</p>
       <h2 class="cw-h2">Traceroute</h2>
     </div>
     <div id="trace-status" class="cw-banner"></div>
   </div>
   <form id="trace-form" class="cw-form">
-    <label for="target">Target IP or host</label>
+    <label for="target">Target IP or hostname</label>
     <div class="cw-input-row">
-      <input type="text" id="target" name="target" placeholder="8.8.8.8" required>
-      <button type="submit">Run</button>
+      <input type="text" id="target" name="target" placeholder="8.8.8.8 or google.com" required>
+      <button type="submit">Run Traceroute</button>
     </div>
   </form>
   <div id="trace-result" class="cw-result"></div>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Mission History</p>
+      <h2 class="cw-h2">Previous Traceroutes</h2>
+    </div>
+    <button id="refresh-history" class="cw-btn-secondary">Refresh</button>
+  </div>
+  <div id="history-list" class="cw-result"></div>
 </section>
 {% endblock %}
 
@@ -24,70 +35,246 @@
   const traceForm = document.getElementById("trace-form");
   const traceResult = document.getElementById("trace-result");
   const traceStatus = document.getElementById("trace-status");
+  const historyList = document.getElementById("history-list");
+  const refreshHistory = document.getElementById("refresh-history");
 
-  function renderHops(hops) {
+  function formatTimestamp(iso) {
+    if (!iso) return "--";
+    const d = new Date(iso);
+    return d.toLocaleString("en-US", { 
+      month: "short", day: "numeric", year: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false 
+    });
+  }
+
+  function renderHops(hops, enrichedHops) {
     if (!hops || !hops.length) {
       return "<p class=\"cw-muted\">No hops returned.</p>";
     }
+    
+    const enrichmentMap = {};
+    if (enrichedHops) {
+      enrichedHops.forEach(eh => {
+        if (eh.ip) enrichmentMap[eh.ip] = eh;
+      });
+    }
+    
     const rows = hops.map((hop) => {
       const ip = hop.ip || "*";
       const rtt = hop.rtt_ms != null ? `${hop.rtt_ms.toFixed(2)} ms` : "--";
-      return `<div class=\"cw-hop\"><span class=\"cw-hop-num\">${hop.hop}</span><span>${ip}</span><span>${rtt}</span></div>`;
+      const enrichment = enrichmentMap[hop.ip] || {};
+      const asnBadge = enrichment.asn ? 
+        `<button class="cw-chip cw-chip-link cw-chip-small" data-asn="${enrichment.asn}">AS${enrichment.asn}</button>` : "";
+      const orgName = enrichment.org_name ? `<span class="cw-muted small">${enrichment.org_name}</span>` : "";
+      const country = enrichment.country ? `<span class="cw-country-badge">${enrichment.country}</span>` : "";
+      
+      return `<div class="cw-hop cw-hop-enhanced">
+        <span class="cw-hop-num">${hop.hop}</span>
+        <div class="cw-hop-details">
+          <div class="cw-hop-main">
+            <span class="cw-hop-ip">${ip}</span>
+            ${asnBadge}
+            ${country}
+          </div>
+          ${orgName}
+        </div>
+        <span class="cw-hop-rtt">${rtt}</span>
+      </div>`;
     }).join("");
-    return `<div class=\"cw-hop-list\">${rows}</div>`;
+    return `<div class="cw-hop-list">${rows}</div>`;
+  }
+
+  function renderAnalytics(analytics) {
+    if (!analytics) return "";
+    
+    const rtt = analytics.rtt_stats || {};
+    
+    let html = `
+    <div class="cw-analytics-grid">
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">Total Hops</div>
+        <div class="cw-stat-value">${analytics.hop_count || 0}</div>
+        <div class="cw-stat-sub">${analytics.timeout_hops || 0} timeout</div>
+      </div>
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">ASNs Traversed</div>
+        <div class="cw-stat-value">${analytics.asn_count || 0}</div>
+        <div class="cw-stat-sub">${(analytics.as_transitions || []).length} transitions</div>
+      </div>
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">Countries</div>
+        <div class="cw-stat-value">${(analytics.countries_traversed || []).length}</div>
+        <div class="cw-stat-sub">${(analytics.countries_traversed || []).join(", ") || "N/A"}</div>
+      </div>
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">Total Latency</div>
+        <div class="cw-stat-value">${rtt.total_ms || "--"} ms</div>
+        <div class="cw-stat-sub">Avg: ${rtt.avg_ms || "--"} ms</div>
+      </div>
+    </div>`;
+    
+    // High latency warnings
+    if (rtt.high_latency_hops && rtt.high_latency_hops.length > 0) {
+      html += `<div class="cw-alert cw-alert-warning">
+        <strong>⚠ High Latency Detected:</strong> 
+        ${rtt.high_latency_hops.map(h => `Hop ${h.hop} (${h.ip}): ${h.rtt_ms.toFixed(1)}ms`).join(", ")}
+      </div>`;
+    }
+    
+    // Packet loss warning
+    if (analytics.packet_loss_pct > 20) {
+      html += `<div class="cw-alert cw-alert-warning">
+        <strong>⚠ Packet Loss:</strong> ${analytics.packet_loss_pct}% of hops did not respond
+      </div>`;
+    }
+    
+    // AS Path visualization
+    if (analytics.asn_path && analytics.asn_path.length > 0) {
+      const pathChips = analytics.asn_path.map(as => 
+        `<button class="cw-chip cw-chip-link" data-asn="${as.asn}" title="${as.org_name || 'Unknown'}">
+          AS${as.asn}${as.country ? ` (${as.country})` : ""}
+        </button>`
+      ).join('<span class="cw-path-arrow">→</span>');
+      html += `<div class="cw-section">
+        <h3>AS Path</h3>
+        <div class="cw-as-path">${pathChips}</div>
+      </div>`;
+    }
+    
+    // Organizations traversed
+    if (analytics.organizations && analytics.organizations.length > 0) {
+      html += `<div class="cw-section">
+        <h3>Organizations Traversed</h3>
+        <ul class="cw-org-list">
+          ${analytics.organizations.map(org => `<li>${org}</li>`).join("")}
+        </ul>
+      </div>`;
+    }
+    
+    return `<div class="cw-analytics-section">${html}</div>`;
   }
 
   function renderTrace(data) {
-    const meta = `<div class=\"cw-meta\"><span>Tool: ${data.tool}</span><span>Success: ${data.success ? "yes" : "no"}</span></div>`;
-    const hops = renderHops(data.hops);
-      const asns = renderAsnHints(data.asn_hints || []);
-    const raw = data.raw_output ? `<details class=\"cw-raw\"><summary>Raw output</summary><pre>${data.raw_output}</pre></details>` : "";
-      return meta + asns + hops + raw;
+    let html = "";
+    
+    // Metadata header
+    html += `<div class="cw-trace-header">
+      <div class="cw-meta">
+        <span>Target: <strong>${data.target}</strong></span>
+        <span>Tool: ${data.tool}</span>
+        <span>Duration: ${data.duration_ms || "--"}ms</span>
+        <span class="cw-${data.success ? 'success' : 'error'}">${data.success ? "✓ Success" : "✗ Failed"}</span>
+      </div>
+      <div class="cw-muted small">
+        ${data.timestamp ? formatTimestamp(data.timestamp) : ""}
+        ${data.measurement_id ? ` | ID: ${data.measurement_id}` : ""}
+      </div>
+    </div>`;
+    
+    // Analytics section
+    html += renderAnalytics(data.analytics);
+    
+    // Hops table
+    html += `<div class="cw-section"><h3>Hop Details</h3>${renderHops(data.hops, data.enriched_hops)}</div>`;
+    
+    // Raw output
+    if (data.raw_output) {
+      html += `<details class="cw-raw"><summary>Raw Output</summary><pre>${data.raw_output}</pre></details>`;
+    }
+    
+    return html;
   }
 
-    function renderAsnHints(asns) {
-      if (!asns.length) {
-        return "";
-      }
-      const chips = asns.map((asn) => `<button class=\"cw-chip cw-chip-link\" data-asn=\"${asn}\">AS${asn}</button>`).join("");
-      return `<div class=\"cw-section\"><h3>ASNs seen</h3><div class=\"cw-chip-row\" id=\"asn-hints\">${chips}</div></div>`;
+  function renderHistory(items) {
+    if (!items || !items.length) {
+      return "<p class=\"cw-muted\">No traceroute history available.</p>";
     }
+    
+    const rows = items.map(item => `
+      <div class="cw-history-row" data-id="${item.id}">
+        <div class="cw-history-main">
+          <span class="cw-history-target">${item.target}</span>
+          <span class="cw-${item.success ? 'pill-ok' : 'pill-bad'}">${item.success ? "OK" : "FAIL"}</span>
+          <span class="cw-muted">${item.hop_count} hops</span>
+          <span class="cw-muted">${item.asn_count} ASNs</span>
+        </div>
+        <div class="cw-history-meta">
+          <span class="cw-muted small">${formatTimestamp(item.started_at)}</span>
+          <button class="cw-btn-small" onclick="loadHistoryItem(${item.id})">View</button>
+        </div>
+      </div>
+    `).join("");
+    
+    return `<div class="cw-history-list">${rows}</div>`;
+  }
+
+  async function loadHistory() {
+    try {
+      const data = await fetchJson("/traceroute/history?limit=25");
+      historyList.innerHTML = renderHistory(data);
+    } catch (err) {
+      historyList.innerHTML = `<p class="cw-error">Failed to load history: ${err.message}</p>`;
+    }
+  }
+
+  async function loadHistoryItem(id) {
+    showMessage(traceStatus, "Loading measurement...", "info");
+    traceResult.innerHTML = "";
+    
+    try {
+      const data = await fetchJson(`/traceroute/history/${id}`);
+      showMessage(traceStatus, "Loaded from history", "success");
+      traceResult.innerHTML = renderTrace(data);
+      attachAsnHintHandlers();
+      // Scroll to results
+      traceResult.scrollIntoView({ behavior: "smooth" });
+    } catch (err) {
+      showMessage(traceStatus, err.message || "Failed to load measurement", "error");
+    }
+  }
+  window.loadHistoryItem = loadHistoryItem;
+
+  function attachAsnHintHandlers() {
+    document.querySelectorAll("button[data-asn]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const asn = btn.getAttribute("data-asn");
+        if (asn) {
+          window.location.href = `/asn?asn=${asn}`;
+        }
+      });
+    });
+  }
 
   traceForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const target = document.getElementById("target").value.trim();
-    if (!target) {
-      return;
-    }
+    if (!target) return;
 
-    showMessage(traceStatus, "Running traceroute...", "info");
+    showMessage(traceStatus, "Running traceroute... (this may take 15-30 seconds)", "info");
     traceResult.innerHTML = "";
 
     try {
       const data = await fetchJson("/traceroute/run", {
         method: "POST",
         body: JSON.stringify({ target }),
+        timeoutMs: 60000, // 60 second timeout for traceroute
       });
       showMessage(traceStatus, "Completed", "success");
       traceResult.innerHTML = renderTrace(data);
-        attachAsnHintHandlers();
+      attachAsnHintHandlers();
+      // Refresh history
+      loadHistory();
     } catch (err) {
       showMessage(traceStatus, err.message || "Traceroute failed", "error");
       traceResult.innerHTML = "";
     }
   });
 
-      function attachAsnHintHandlers() {
-        const container = document.getElementById("asn-hints");
-        if (!container) return;
-        container.querySelectorAll("button[data-asn]").forEach((btn) => {
-          btn.addEventListener("click", () => {
-            const asn = btn.getAttribute("data-asn");
-            if (asn) {
-              window.location.href = `/asn?asn=${asn}`;
-            }
-          });
-        });
-      }
+  refreshHistory.addEventListener("click", loadHistory);
+
+  // Load history on page load
+  loadHistory();
 </script>
 {% endblock %}

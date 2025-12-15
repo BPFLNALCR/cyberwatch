@@ -3,19 +3,29 @@
 <section class="cw-card">
   <div class="cw-card-header">
     <div>
-      <p class="cw-eyebrow">Autonomous system intel</p>
+      <p class="cw-eyebrow">Autonomous System Intelligence</p>
       <h2 class="cw-h2">ASN Explorer</h2>
     </div>
     <div id="asn-status" class="cw-banner"></div>
   </div>
   <form id="asn-form" class="cw-form">
-    <label for="asn">ASN</label>
+    <label for="asn">ASN Number or IP Address</label>
     <div class="cw-input-row">
-      <input type="number" id="asn" name="asn" placeholder="13335" min="1" required>
+      <input type="text" id="asn" name="asn" placeholder="13335 or 8.8.8.8" required>
       <button type="submit">Lookup</button>
     </div>
   </form>
   <div id="asn-result" class="cw-result"></div>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Intelligence History</p>
+      <h2 class="cw-h2">Recent ASN Lookups</h2>
+    </div>
+  </div>
+  <div id="asn-history" class="cw-result"></div>
 </section>
 {% endblock %}
 
@@ -24,48 +34,183 @@
   const asnForm = document.getElementById("asn-form");
   const asnResult = document.getElementById("asn-result");
   const asnStatus = document.getElementById("asn-status");
+  const asnHistory = document.getElementById("asn-history");
+  
+  // Store lookup history in localStorage
+  const HISTORY_KEY = "cyberwatch_asn_history";
+  const MAX_HISTORY = 20;
 
-  function renderList(items) {
-    if (!items || !items.length) {
-      return "<p class=\"cw-muted\">No data.</p>";
+  function getHistory() {
+    try {
+      return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    } catch {
+      return [];
     }
-    return `<div class=\"cw-chip-row\">${items.map((i) => `<span class=\"cw-chip\">${i}</span>`).join("")}</div>`;
+  }
+
+  function saveToHistory(data) {
+    const history = getHistory();
+    const entry = {
+      asn: data.asn,
+      org_name: data.org_name,
+      country: data.country,
+      neighbor_count: (data.neighbors || []).length,
+      source: data.source,
+      timestamp: new Date().toISOString(),
+    };
+    // Remove duplicates
+    const filtered = history.filter(h => h.asn !== data.asn);
+    filtered.unshift(entry);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(filtered.slice(0, MAX_HISTORY)));
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const history = getHistory();
+    if (!history.length) {
+      asnHistory.innerHTML = "<p class=\"cw-muted\">No lookup history yet.</p>";
+      return;
+    }
+    
+    const rows = history.map(h => `
+      <div class="cw-history-row" onclick="lookupAsn('${h.asn}')">
+        <div class="cw-history-main">
+          <span class="cw-chip cw-chip-link">AS${h.asn}</span>
+          <span>${h.org_name || "Unknown"}</span>
+          <span class="cw-country-badge">${h.country || "?"}</span>
+        </div>
+        <div class="cw-history-meta">
+          <span class="cw-muted small">${h.neighbor_count} neighbors</span>
+          <span class="cw-muted small">${formatTimestamp(h.timestamp)}</span>
+        </div>
+      </div>
+    `).join("");
+    
+    asnHistory.innerHTML = `<div class="cw-history-list">${rows}</div>`;
+  }
+
+  function formatTimestamp(iso) {
+    if (!iso) return "--";
+    const d = new Date(iso);
+    return d.toLocaleString("en-US", { 
+      month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
+      hour12: false 
+    });
+  }
+
+  function renderNeighbors(neighbors) {
+    if (!neighbors || !neighbors.length) {
+      return "<p class=\"cw-muted\">No neighbor data available.</p>";
+    }
+    const chips = neighbors.map((n) => {
+      const asn = typeof n === "object" ? n : n;
+      return `<button class="cw-chip cw-chip-link" onclick="lookupAsn('${asn}')">AS${asn}</button>`;
+    }).join("");
+    return `<div class="cw-chip-row">${chips}</div>`;
   }
 
   function renderAsn(data) {
-    const header = `<div class=\"cw-meta\"><span>AS${data.asn}</span><span>${data.country || "Unknown"}</span></div>`;
-    const org = `<p class=\"cw-body\">${data.org_name || "No org name"}</p>`;
-    const neighbors = `<div class=\"cw-section\"><h3>Neighbors</h3>${renderList(data.neighbors)}</div>`;
-    const prefixes = `<div class=\"cw-section\"><h3>Prefixes</h3>${renderList(data.prefixes)}</div>`;
-    return header + org + neighbors + prefixes;
+    let html = `
+    <div class="cw-asn-header">
+      <div class="cw-asn-main">
+        <h3 class="cw-asn-title">AS${data.asn}</h3>
+        <span class="cw-country-badge cw-country-large">${data.country || "?"}</span>
+      </div>
+      <p class="cw-asn-org">${data.org_name || "Organization name unavailable"}</p>
+      <div class="cw-muted small">Data source: ${data.source || "external"}</div>
+    </div>
+    
+    <div class="cw-analytics-grid">
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">Neighbors</div>
+        <div class="cw-stat-value">${(data.neighbors || []).length}</div>
+      </div>
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">Prefixes</div>
+        <div class="cw-stat-value">${(data.prefixes || []).length}</div>
+      </div>
+      <div class="cw-stat-card">
+        <div class="cw-stat-label">Country</div>
+        <div class="cw-stat-value">${data.country || "N/A"}</div>
+      </div>
+    </div>`;
+    
+    if (data.neighbors && data.neighbors.length > 0) {
+      html += `<div class="cw-section">
+        <h3>Neighbor ASNs (${data.neighbors.length})</h3>
+        ${renderNeighbors(data.neighbors)}
+      </div>`;
+    }
+    
+    if (data.prefixes && data.prefixes.length > 0) {
+      html += `<div class="cw-section">
+        <h3>Announced Prefixes</h3>
+        <div class="cw-prefix-list">
+          ${data.prefixes.map(p => `<span class="cw-chip">${p}</span>`).join("")}
+        </div>
+      </div>`;
+    }
+    
+    // Add quick actions
+    html += `<div class="cw-section cw-actions">
+      <h3>Actions</h3>
+      <div class="cw-input-row">
+        <a href="/graph?asn=${data.asn}" class="cw-btn-secondary">View Graph Neighbors</a>
+        <a href="https://bgp.he.net/AS${data.asn}" target="_blank" rel="noopener" class="cw-btn-secondary">View on HE BGP</a>
+        <a href="https://www.peeringdb.com/asn/${data.asn}" target="_blank" rel="noopener" class="cw-btn-secondary">View on PeeringDB</a>
+      </div>
+    </div>`;
+    
+    return html;
   }
 
-  asnForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const asn = document.getElementById("asn").value.trim();
-    if (!asn) {
-      return;
-    }
-
+  async function lookupAsn(input) {
+    document.getElementById("asn").value = input;
     showMessage(asnStatus, "Fetching...", "info");
     asnResult.innerHTML = "";
 
     try {
-      const data = await fetchJson(`/asn/${asn}`);
+      let data;
+      // Check if input is an IP address
+      const isIP = /^[\d.:a-fA-F]+$/.test(input) && (input.includes(".") || input.includes(":"));
+      
+      if (isIP) {
+        // Lookup ASN for IP first
+        const ipData = await fetchJson(`/asn/lookup/${input}`);
+        showMessage(asnStatus, `IP belongs to AS${ipData.asn}`, "success");
+        // Now get full ASN details
+        data = await fetchJson(`/asn/${ipData.asn}`);
+      } else {
+        data = await fetchJson(`/asn/${input}`);
+      }
+      
       showMessage(asnStatus, "Loaded", "success");
       asnResult.innerHTML = renderAsn(data);
+      saveToHistory(data);
     } catch (err) {
       showMessage(asnStatus, err.message || "Lookup failed", "error");
       asnResult.innerHTML = "";
     }
+  }
+  window.lookupAsn = lookupAsn;
+
+  asnForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("asn").value.trim();
+    if (!input) return;
+    await lookupAsn(input);
   });
 
+  // Initialize
+  renderHistory();
+
+  // Preload from query string
   (function preloadFromQuery() {
     const params = new URLSearchParams(window.location.search);
     const prefill = params.get("asn");
     if (prefill) {
-      document.getElementById("asn").value = prefill;
-      asnForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      lookupAsn(prefill);
     }
   })();
 </script>

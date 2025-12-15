@@ -1,15 +1,19 @@
-"""On-demand traceroute and mtr endpoints."""
+"""On-demand traceroute and mtr endpoints with enhanced analytics."""
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
-from typing import List
+from datetime import datetime
+from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, status
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from cyberWatch.api.models import TracerouteRequest, ok
+from cyberWatch.api.utils.db import pg_dep
 from cyberWatch.workers.worker import run_traceroute
-from cyberWatch.enrichment.asn_lookup import lookup_asn
+from cyberWatch.enrichment.asn_lookup import lookup_asn, AsnInfo
 
 router = APIRouter(prefix="/traceroute", tags=["traceroute"])
 
@@ -18,22 +22,191 @@ def _http_error(code: int, message: str) -> None:
     raise HTTPException(status_code=code, detail={"status": "error", "message": message})
 
 
-async def _lookup_hop_asns(hops) -> List[int]:
+async def _enrich_hop(ip: str) -> Dict[str, Any]:
+    """Get detailed enrichment for a hop IP."""
+    info = await lookup_asn(ip)
+    return {
+        "ip": ip,
+        "asn": info.asn,
+        "prefix": info.prefix,
+        "org_name": info.org_name,
+        "country": info.country,
+    }
+
+
+async def _lookup_hop_details(hops) -> List[Dict[str, Any]]:
+    """Enrich all hops with ASN and geolocation data."""
     ips = [hop.ip for hop in hops if getattr(hop, "ip", None)]
     if not ips:
         return []
-    tasks = [lookup_asn(ip) for ip in ips]
+    
+    tasks = [_enrich_hop(ip) for ip in ips]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    seen = set()
-    ordered: List[int] = []
-    for res in results:
-        if isinstance(res, Exception) or getattr(res, "asn", None) is None:
-            continue
-        asn_val = int(res.asn)
-        if asn_val not in seen:
-            seen.add(asn_val)
-            ordered.append(asn_val)
-    return ordered
+    
+    enriched = []
+    for ip, res in zip(ips, results):
+        if isinstance(res, Exception):
+            enriched.append({"ip": ip, "asn": None, "prefix": None, "org_name": None, "country": None})
+        else:
+            enriched.append(res)
+    return enriched
+
+
+def _compute_analytics(hops, enriched_hops: List[Dict]) -> Dict[str, Any]:
+    """Compute cyber defense relevant analytics from traceroute results."""
+    total_hops = len(hops)
+    responding_hops = sum(1 for h in hops if getattr(h, "ip", None))
+    timeout_hops = total_hops - responding_hops
+    
+    # RTT analysis
+    rtts = [h.rtt_ms for h in hops if getattr(h, "rtt_ms", None) is not None]
+    rtt_stats = {}
+    if rtts:
+        rtt_stats = {
+            "min_ms": round(min(rtts), 2),
+            "max_ms": round(max(rtts), 2),
+            "avg_ms": round(sum(rtts) / len(rtts), 2),
+            "total_ms": round(sum(rtts), 2),
+        }
+        # Detect latency anomalies (hops with RTT > 2x average)
+        avg_rtt = rtt_stats["avg_ms"]
+        high_latency_hops = [
+            {"hop": h.hop, "ip": h.ip, "rtt_ms": h.rtt_ms}
+            for h in hops 
+            if getattr(h, "rtt_ms", None) and h.rtt_ms > avg_rtt * 2
+        ]
+        rtt_stats["high_latency_hops"] = high_latency_hops
+    
+    # ASN path analysis
+    asn_path = []
+    unique_asns = set()
+    countries_traversed = set()
+    organizations = []
+    
+    for eh in enriched_hops:
+        if eh.get("asn"):
+            if eh["asn"] not in unique_asns:
+                unique_asns.add(eh["asn"])
+                asn_path.append({
+                    "asn": eh["asn"],
+                    "org_name": eh.get("org_name"),
+                    "country": eh.get("country"),
+                })
+                if eh.get("org_name"):
+                    organizations.append(eh["org_name"])
+        if eh.get("country"):
+            countries_traversed.add(eh["country"])
+    
+    # Network boundary crossings (AS transitions)
+    as_transitions = []
+    prev_asn = None
+    for eh in enriched_hops:
+        curr_asn = eh.get("asn")
+        if curr_asn and prev_asn and curr_asn != prev_asn:
+            as_transitions.append({
+                "from_asn": prev_asn,
+                "to_asn": curr_asn,
+            })
+        if curr_asn:
+            prev_asn = curr_asn
+    
+    return {
+        "hop_count": total_hops,
+        "responding_hops": responding_hops,
+        "timeout_hops": timeout_hops,
+        "packet_loss_pct": round((timeout_hops / total_hops) * 100, 1) if total_hops > 0 else 0,
+        "rtt_stats": rtt_stats,
+        "asn_count": len(unique_asns),
+        "asn_path": asn_path,
+        "as_transitions": as_transitions,
+        "countries_traversed": list(countries_traversed),
+        "organizations": organizations,
+    }
+
+
+async def _save_measurement(
+    pool: asyncpg.Pool,
+    target: str,
+    tool: str,
+    started_at: datetime,
+    completed_at: datetime,
+    success: bool,
+    raw_output: str,
+    hops: List,
+    enriched_hops: List[Dict],
+    source: str = "web_ui",
+) -> int:
+    """Save traceroute measurement to database."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Get or create target
+            existing = await conn.fetchrow(
+                "SELECT id FROM targets WHERE target_ip = $1",
+                target,
+            )
+            if existing:
+                target_id = existing["id"]
+            else:
+                target_id = await conn.fetchval(
+                    "INSERT INTO targets (target_ip, source) VALUES ($1, $2) RETURNING id",
+                    target,
+                    source,
+                )
+            
+            # Insert measurement
+            measurement_id = await conn.fetchval(
+                """
+                INSERT INTO measurements (target_id, tool, started_at, completed_at, success, raw_output)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+                """,
+                target_id,
+                tool,
+                started_at,
+                completed_at,
+                success,
+                raw_output,
+            )
+            
+            # Create IP to enrichment lookup
+            ip_to_enrichment = {eh["ip"]: eh for eh in enriched_hops}
+            
+            # Insert hops with enrichment
+            for hop in hops:
+                hop_ip = getattr(hop, "ip", None)
+                enrichment = ip_to_enrichment.get(hop_ip, {}) if hop_ip else {}
+                
+                await conn.execute(
+                    """
+                    INSERT INTO hops (measurement_id, hop_number, hop_ip, rtt_ms, asn, prefix, org_name, country_code)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    """,
+                    measurement_id,
+                    hop.hop,
+                    hop_ip,
+                    getattr(hop, "rtt_ms", None),
+                    enrichment.get("asn"),
+                    enrichment.get("prefix"),
+                    enrichment.get("org_name"),
+                    enrichment.get("country"),
+                )
+            
+            # Update target last seen
+            await conn.execute(
+                "UPDATE targets SET last_seen = $1 WHERE id = $2",
+                completed_at,
+                target_id,
+            )
+            
+            # Mark as enriched if we have data
+            if enriched_hops:
+                await conn.execute(
+                    "UPDATE measurements SET enriched = TRUE, enriched_at = $2 WHERE id = $1",
+                    measurement_id,
+                    datetime.utcnow(),
+                )
+            
+            return measurement_id
 
 
 async def _run_mtr(target: str) -> dict:
@@ -51,13 +224,6 @@ async def _run_mtr(target: str) -> dict:
     lines = [l.strip() for l in output.splitlines() if l.strip()]
     hops: List[dict] = []
     
-    # MTR report format:
-    # Start: 2024-01-01T12:00:00+0000
-    # HOST: hostname                    Loss%   Snt   Last   Avg  Best  Wrst StDev
-    #   1.|-- 192.168.1.1               0.0%     5    0.5   0.4   0.3   0.5   0.1
-    #   2.|-- ???                      100.0     5    0.0   0.0   0.0   0.0   0.0
-    
-    import re
     mtr_hop_pattern = re.compile(
         r"^\s*(?P<hop>\d+)\.\|--\s+(?P<ip>\S+)\s+"
         r"(?P<loss>[0-9.]+)%?\s+"
@@ -79,33 +245,203 @@ async def _run_mtr(target: str) -> dict:
             try:
                 rtt = float(match.group("avg"))
                 if rtt == 0.0 and ip is None:
-                    rtt = None  # Timeout hop
+                    rtt = None
             except ValueError:
                 rtt = None
-            hops.append({"hop": hop_num, "ip": ip, "rtt_ms": rtt})
+            hops.append({
+                "hop": hop_num, 
+                "ip": ip, 
+                "rtt_ms": rtt,
+                "loss_pct": float(match.group("loss")),
+                "sent": int(match.group("snt")),
+                "best_ms": float(match.group("best")),
+                "worst_ms": float(match.group("wrst")),
+            })
     
     return {"raw": output, "hops": hops}
 
 
 @router.post("/run")
-async def run(req: TracerouteRequest):
+async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep)):
+    """Run traceroute with enhanced analytics and save to database."""
+    started_at = datetime.utcnow()
+    
     try:
         result = await run_traceroute(req.target)
     except RuntimeError as exc:
         _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:
         _http_error(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Traceroute failed: {exc}")
-
-    asn_hints = await _lookup_hop_asns(result.hops)
+    
+    completed_at = datetime.utcnow()
+    
+    # Enrich hops with ASN/geo data
+    enriched_hops = await _lookup_hop_details(result.hops)
+    
+    # Compute analytics
+    analytics = _compute_analytics(result.hops, enriched_hops)
+    
+    # Build ASN hints for backwards compatibility
+    asn_hints = [eh["asn"] for eh in enriched_hops if eh.get("asn")]
+    # Remove duplicates while preserving order
+    seen = set()
+    asn_hints = [x for x in asn_hints if not (x in seen or seen.add(x))]
+    
+    # Save to database
+    try:
+        measurement_id = await _save_measurement(
+            pool,
+            req.target,
+            result.tool,
+            started_at,
+            completed_at,
+            result.success,
+            result.raw_output,
+            result.hops,
+            enriched_hops,
+            source="web_ui",
+        )
+    except Exception as exc:
+        # Log but don't fail the request
+        measurement_id = None
+    
+    # Build response
     payload = result.model_dump()
+    payload["measurement_id"] = measurement_id
     payload["asn_hints"] = asn_hints
+    payload["enriched_hops"] = enriched_hops
+    payload["analytics"] = analytics
+    payload["timestamp"] = started_at.isoformat()
+    payload["duration_ms"] = round((completed_at - started_at).total_seconds() * 1000, 2)
+    
     return ok(payload)
 
 
 @router.post("/mtr/run")
-async def run_mtr(req: TracerouteRequest):
+async def run_mtr_endpoint(req: TracerouteRequest):
+    """Run MTR with enhanced statistics."""
     try:
         data = await _run_mtr(req.target)
     except Exception as exc:
         _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
     return ok(data)
+
+
+@router.get("/history")
+async def get_history(
+    target: Optional[str] = Query(None, description="Filter by target IP/hostname"),
+    limit: int = Query(50, ge=1, le=200),
+    pool: asyncpg.Pool = Depends(pg_dep),
+):
+    """Get traceroute measurement history."""
+    if target:
+        rows = await pool.fetch(
+            """
+            SELECT m.id, t.target_ip as target, m.tool, m.started_at, m.completed_at, 
+                   m.success, m.enriched,
+                   (SELECT COUNT(*) FROM hops WHERE measurement_id = m.id) as hop_count,
+                   (SELECT COUNT(DISTINCT asn) FROM hops WHERE measurement_id = m.id AND asn IS NOT NULL) as asn_count
+            FROM measurements m
+            JOIN targets t ON t.id = m.target_id
+            WHERE t.target_ip = $1 OR t.target_ip::text LIKE $2
+            ORDER BY m.started_at DESC
+            LIMIT $3
+            """,
+            target,
+            f"%{target}%",
+            limit,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT m.id, t.target_ip as target, m.tool, m.started_at, m.completed_at, 
+                   m.success, m.enriched,
+                   (SELECT COUNT(*) FROM hops WHERE measurement_id = m.id) as hop_count,
+                   (SELECT COUNT(DISTINCT asn) FROM hops WHERE measurement_id = m.id AND asn IS NOT NULL) as asn_count
+            FROM measurements m
+            JOIN targets t ON t.id = m.target_id
+            ORDER BY m.started_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+    
+    return ok([
+        {
+            "id": row["id"],
+            "target": str(row["target"]),
+            "tool": row["tool"],
+            "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+            "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+            "success": row["success"],
+            "enriched": row["enriched"],
+            "hop_count": row["hop_count"],
+            "asn_count": row["asn_count"],
+        }
+        for row in rows
+    ])
+
+
+@router.get("/history/{measurement_id}")
+async def get_measurement_detail(measurement_id: int, pool: asyncpg.Pool = Depends(pg_dep)):
+    """Get detailed traceroute measurement with hops and analytics."""
+    measurement = await pool.fetchrow(
+        """
+        SELECT m.id, t.target_ip as target, m.tool, m.started_at, m.completed_at, 
+               m.success, m.raw_output, m.enriched
+        FROM measurements m
+        JOIN targets t ON t.id = m.target_id
+        WHERE m.id = $1
+        """,
+        measurement_id,
+    )
+    
+    if not measurement:
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    
+    hops = await pool.fetch(
+        """
+        SELECT hop_number as hop, hop_ip as ip, rtt_ms, asn, prefix, org_name, country_code as country
+        FROM hops
+        WHERE measurement_id = $1
+        ORDER BY hop_number ASC
+        """,
+        measurement_id,
+    )
+    
+    hops_list = [dict(h) for h in hops]
+    
+    # Build enriched hops for analytics
+    enriched_hops = [
+        {
+            "ip": str(h["ip"]) if h["ip"] else None,
+            "asn": h["asn"],
+            "prefix": str(h["prefix"]) if h["prefix"] else None,
+            "org_name": h["org_name"],
+            "country": h["country"],
+        }
+        for h in hops_list if h.get("ip")
+    ]
+    
+    # Compute analytics from stored hops
+    class HopObj:
+        def __init__(self, hop, ip, rtt_ms):
+            self.hop = hop
+            self.ip = str(ip) if ip else None
+            self.rtt_ms = rtt_ms
+    
+    hop_objects = [HopObj(h["hop"], h["ip"], h["rtt_ms"]) for h in hops_list]
+    analytics = _compute_analytics(hop_objects, enriched_hops)
+    
+    return ok({
+        "id": measurement["id"],
+        "target": str(measurement["target"]),
+        "tool": measurement["tool"],
+        "started_at": measurement["started_at"].isoformat() if measurement["started_at"] else None,
+        "completed_at": measurement["completed_at"].isoformat() if measurement["completed_at"] else None,
+        "success": measurement["success"],
+        "raw_output": measurement["raw_output"],
+        "hops": hops_list,
+        "enriched_hops": enriched_hops,
+        "analytics": analytics,
+    })
