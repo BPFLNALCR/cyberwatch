@@ -3,7 +3,6 @@ redis
 asyncpg
 pydantic
 rich
-neo4j-driver
 dnspython
 PyYAML
 fastapi

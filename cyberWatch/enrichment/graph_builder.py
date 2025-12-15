@@ -51,9 +51,9 @@ def _build_edges(hops: Sequence[Record], observed_at: datetime) -> List[EdgeMode
     return edges
 
 
-async def _merge_edge(tx, edge: EdgeModel) -> None:
-    await tx.run(
-        """
+async def _merge_edge(session, edge: EdgeModel) -> None:
+    """Merge AS nodes and ROUTE relationship into Neo4j."""
+    query = """
         MERGE (a:AS {asn: $asn_a})
           ON CREATE SET a.org_name = $org_a, a.country = $country_a, a.first_seen = $ts
           ON MATCH SET a.org_name = coalesce(a.org_name, $org_a), a.country = coalesce(a.country, $country_a), a.last_seen = $ts
@@ -67,7 +67,9 @@ async def _merge_edge(tx, edge: EdgeModel) -> None:
                        r.min_rtt = CASE WHEN r.min_rtt IS NULL OR $rtt IS NULL THEN r.min_rtt ELSE LEAST(r.min_rtt, $rtt) END,
                        r.max_rtt = CASE WHEN r.max_rtt IS NULL OR $rtt IS NULL THEN r.max_rtt ELSE GREATEST(r.max_rtt, $rtt) END,
                        r.last_seen = $ts
-        """,
+        """
+    await session.run(
+        query,
         asn_a=edge.a.asn,
         org_a=edge.a.org_name,
         country_a=edge.a.country,
@@ -95,7 +97,7 @@ async def process_measurement(pool, driver: AsyncDriver, measurement_id: int, ob
             a, b = edge.a, edge.b
             if a.asn > b.asn:
                 edge = EdgeModel(a=b, b=a, observed_at=edge.observed_at, rtt_ms=edge.rtt_ms)
-            await session.execute_write(_merge_edge, edge)
+            await _merge_edge(session, edge)
     await pg.mark_measurement_graph_built(pool, measurement_id)
     console.print(f"[green]Graph updated for measurement {measurement_id}")
 

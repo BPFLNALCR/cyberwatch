@@ -24,7 +24,8 @@ async def _fetch_asn(driver: AsyncDriver, asn: int) -> dict:
            collect(distinct n.asn) AS neighbors
     """
     async with driver.session() as session:
-        record = await session.execute_read(lambda tx: tx.run(query, asn=asn).single())
+        result = await session.run(query, asn=asn)
+        record = await result.single()
         if record is None:
             raise HTTPException(status_code=404, detail="ASN not found")
         return {

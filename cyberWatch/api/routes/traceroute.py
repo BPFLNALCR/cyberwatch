@@ -39,7 +39,8 @@ async def _lookup_hop_asns(hops) -> List[int]:
 async def _run_mtr(target: str) -> dict:
     if shutil.which("mtr") is None:
         raise RuntimeError("mtr not installed")
-    cmd = ["mtr", "-n", "-c", "5", "-r", target]
+    # -n: numeric only, -c 5: 5 pings per hop, -r: report mode, -w: wide output
+    cmd = ["mtr", "-n", "-c", "5", "-r", "-w", target]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -49,16 +50,40 @@ async def _run_mtr(target: str) -> dict:
     output = stdout.decode("utf-8", errors="replace") if stdout else ""
     lines = [l.strip() for l in output.splitlines() if l.strip()]
     hops: List[dict] = []
+    
+    # MTR report format:
+    # Start: 2024-01-01T12:00:00+0000
+    # HOST: hostname                    Loss%   Snt   Last   Avg  Best  Wrst StDev
+    #   1.|-- 192.168.1.1               0.0%     5    0.5   0.4   0.3   0.5   0.1
+    #   2.|-- ???                      100.0     5    0.0   0.0   0.0   0.0   0.0
+    
+    import re
+    mtr_hop_pattern = re.compile(
+        r"^\s*(?P<hop>\d+)\.\|--\s+(?P<ip>\S+)\s+"
+        r"(?P<loss>[0-9.]+)%?\s+"
+        r"(?P<snt>\d+)\s+"
+        r"(?P<last>[0-9.]+)\s+"
+        r"(?P<avg>[0-9.]+)\s+"
+        r"(?P<best>[0-9.]+)\s+"
+        r"(?P<wrst>[0-9.]+)"
+    )
+    
     for line in lines:
-        if line.startswith("HOST"):
+        if line.startswith("HOST:") or line.startswith("Start:"):
             continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        hop_num = parts[0]
-        ip = parts[1] if parts[1] != "???" else None
-        rtt = float(parts[2]) if len(parts) >= 3 else None
-        hops.append({"hop": int(hop_num), "ip": ip, "rtt_ms": rtt})
+        match = mtr_hop_pattern.match(line)
+        if match:
+            hop_num = int(match.group("hop"))
+            ip_raw = match.group("ip")
+            ip = None if ip_raw == "???" or "*" in ip_raw else ip_raw
+            try:
+                rtt = float(match.group("avg"))
+                if rtt == 0.0 and ip is None:
+                    rtt = None  # Timeout hop
+            except ValueError:
+                rtt = None
+            hops.append({"hop": hop_num, "ip": ip, "rtt_ms": rtt})
+    
     return {"raw": output, "hops": hops}
 
 

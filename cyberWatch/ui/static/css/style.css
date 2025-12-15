@@ -194,6 +194,20 @@ body {
 .cw-muted { color: #8aa5c1; margin: 0; }
 .small { font-size: 0.85rem; }
 
+.cw-neighbor-list { display: grid; gap: 0.35rem; }
+.cw-neighbor-row {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.55rem 0.75rem;
+	background: rgba(255, 255, 255, 0.03);
+	border: 1px solid rgba(255, 255, 255, 0.05);
+	border-radius: 10px;
+	flex-wrap: wrap;
+}
+.cw-neighbor-row .cw-chip { flex-shrink: 0; }
+.cw-neighbor-row .cw-muted { font-size: 0.85rem; }
+
 @media (max-width: 720px) {
 	.cw-header { padding: 1rem 1.25rem; }
 	.cw-page { padding: 1.25rem; }

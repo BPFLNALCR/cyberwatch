@@ -29,8 +29,32 @@
     if (!data.neighbors || !data.neighbors.length) {
       return '<p class="cw-muted">No neighbors found.</p>';
     }
-    const chips = data.neighbors.map((n) => `<span class="cw-chip">AS${n}</span>`).join('');
-    return `<div class="cw-section"><h3>Neighbors of AS${data.asn}</h3><div class="cw-chip-row">${chips}</div></div>`;
+    // Each neighbor has: neighbor_asn, observed_count, min_rtt, max_rtt, last_seen
+    const rows = data.neighbors.map((n) => {
+      const asn = n.neighbor_asn || n;
+      const count = n.observed_count != null ? n.observed_count : '—';
+      const rttInfo = n.min_rtt != null && n.max_rtt != null 
+        ? `${n.min_rtt.toFixed(1)}-${n.max_rtt.toFixed(1)}ms` 
+        : '—';
+      return `<div class="cw-neighbor-row">
+        <span class="cw-chip cw-chip-link" data-asn="${asn}">AS${asn}</span>
+        <span class="cw-muted">seen: ${count}</span>
+        <span class="cw-muted">RTT: ${rttInfo}</span>
+      </div>`;
+    }).join('');
+    return `<div class="cw-section"><h3>Neighbors of AS${data.asn}</h3><div class="cw-neighbor-list">${rows}</div></div>`;
+  }
+
+  function attachNeighborHandlers() {
+    document.querySelectorAll('.cw-chip-link[data-asn]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const asn = el.getAttribute('data-asn');
+        if (asn) {
+          document.getElementById('asn').value = asn;
+          graphForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      });
+    });
   }
 
   graphForm.addEventListener('submit', async (e) => {
@@ -45,6 +69,7 @@
       const data = await fetchJson(`/graph/neighbors/${asn}`);
       showMessage(graphStatus, 'Loaded', 'success');
       graphData.innerHTML = renderNeighbors(data);
+      attachNeighborHandlers();
     } catch (err) {
       showMessage(graphStatus, err.message || 'Failed to load neighbors', 'error');
       graphData.innerHTML = '';

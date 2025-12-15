@@ -7,14 +7,14 @@ from neo4j import AsyncDriver
 
 from cyberWatch.api.models import ok
 from cyberWatch.api.utils.db import neo4j_dep, pg_dep
-from cyberWatch.workers.worker import _pick_command
+from cyberWatch.workers.worker import _pick_tool
 
 router = APIRouter(prefix="/health", tags=["health"])
 
 
 async def _check_traceroute() -> dict:
     try:
-        _, _, tool = _pick_command("1.1.1.1")
+        tool = _pick_tool()
         return {"available": True, "tool": tool, "message": f"Using {tool}"}
     except Exception as exc:
         return {"available": False, "tool": None, "message": str(exc)}
@@ -31,7 +31,9 @@ async def _check_postgres(pool: asyncpg.Pool) -> dict:
 async def _check_neo4j(driver: AsyncDriver) -> dict:
     try:
         async with driver.session() as session:
-            val = await session.execute_read(lambda tx: tx.run("RETURN 1 AS ok").single()["ok"])
+            result = await session.run("RETURN 1 AS ok")
+            record = await result.single()
+            val = record["ok"] if record else None
         return {"ok": bool(val), "message": "Connected" if val else "Unexpected response"}
     except Exception as exc:
         return {"ok": False, "message": str(exc)}

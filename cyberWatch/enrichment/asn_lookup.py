@@ -92,10 +92,11 @@ async def _lookup_dns(ip: str) -> AsnInfo:
 
     if addr.version == 4:
         reversed_ip = ".".join(reversed(ip.split(".")))
+        query = f"{reversed_ip}.origin.asn.cymru.com"
     else:
-        # nibble-reverse IPv6
+        # nibble-reverse IPv6 and use origin6.asn.cymru.com
         reversed_ip = ".".join(reversed(addr.exploded.replace(":", "")))
-    query = f"{reversed_ip}.origin.asn.cymru.com"
+        query = f"{reversed_ip}.origin6.asn.cymru.com"
 
     try:
         answers = await dns.asyncresolver.resolve(query, "TXT")
