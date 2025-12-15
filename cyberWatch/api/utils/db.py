@@ -8,10 +8,17 @@ import asyncpg
 from fastapi import Depends
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-PG_DSN = os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch")
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
+def _clean(val: str | None, default: str) -> str:
+    if not val:
+        return default
+    cleaned = val.strip().strip("\"").strip("'").rstrip("]").rstrip("\"")
+    return cleaned or default
+
+
+PG_DSN = _clean(os.getenv("CYBERWATCH_PG_DSN"), "postgresql://postgres:postgres@localhost:5432/cyberWatch")
+NEO4J_URI = _clean(os.getenv("NEO4J_URI"), "bolt://localhost:7687")
+NEO4J_USER = _clean(os.getenv("NEO4J_USER"), "neo4j")
+NEO4J_PASSWORD = _clean(os.getenv("NEO4J_PASSWORD"), "neo4j")
 
 _pool: Optional[asyncpg.Pool] = None
 _driver: Optional[AsyncDriver] = None

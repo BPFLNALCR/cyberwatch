@@ -136,22 +136,27 @@ PY
 
 ensure_postgresql_running() {
   if ! command -v systemctl >/dev/null 2>&1; then
-    warn "systemctl not found; cannot manage postgresql service automatically."
-    return 0
+    warn "systemctl not found; will try pg_ctlcluster if available."
+  else
+    # systemctl may exist but be non-functional (e.g., containers/WSL without systemd).
+    if systemctl list-unit-files >/dev/null 2>&1; then
+      if systemctl list-unit-files | grep -q '^postgresql\.service'; then
+        if ! sudo systemctl is-active --quiet postgresql.service; then
+          log "Starting postgresql.service"
+          sudo systemctl enable postgresql.service >/dev/null 2>&1 || true
+          sudo systemctl start postgresql.service || true
+        fi
+        return 0
+      else
+        warn "postgresql.service not found (is PostgreSQL installed and systemd managing services?)."
+      fi
+    else
+      warn "systemctl is not functional; will try pg_ctlcluster if available."
+    fi
   fi
-  # systemctl may exist but be non-functional (e.g., containers/WSL without systemd).
-  if ! systemctl list-unit-files >/dev/null 2>&1; then
-    warn "systemctl is not functional; cannot manage postgresql service automatically."
-    return 0
-  fi
-  if ! systemctl list-unit-files | grep -q '^postgresql\.service'; then
-    warn "postgresql.service not found (is PostgreSQL installed and systemd managing services?)."
-    return 0
-  fi
-  if ! sudo systemctl is-active --quiet postgresql.service; then
-    log "Starting postgresql.service"
-    sudo systemctl enable postgresql.service >/dev/null 2>&1 || true
-    sudo systemctl start postgresql.service
+  if command -v pg_ctlcluster >/dev/null 2>&1; then
+    log "Starting PostgreSQL clusters via pg_ctlcluster"
+    sudo pg_ctlcluster --all start || true
   fi
 }
 
