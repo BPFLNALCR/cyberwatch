@@ -10,7 +10,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-API_BASE = os.getenv("CYBERWATCH_API_BASE", "http://localhost:8000")
+# If set, use a fixed API base; otherwise derive from request host
+API_BASE = os.getenv("CYBERWATCH_API_BASE", "")
+API_PORT = os.getenv("CYBERWATCH_API_PORT", "8000")
 
 app = FastAPI(title="cyberWatch-ui", version="0.1.0")
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
@@ -34,8 +36,18 @@ async def shutdown_event() -> None:
         _session = None
 
 
+def _get_api_base(request: Request) -> str:
+    """Derive API base URL from request or environment."""
+    if API_BASE:
+        return API_BASE.rstrip("/")
+    # Use the same host the browser used to reach the UI, but on the API port
+    host = request.headers.get("host", "localhost").split(":")[0]
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return f"{scheme}://{host}:{API_PORT}"
+
+
 def _ctx(request: Request, **kwargs: Any) -> Dict[str, Any]:
-    base = {"request": request, "api_base": API_BASE}
+    base = {"request": request, "api_base": _get_api_base(request)}
     base.update(kwargs)
     return base
 
