@@ -4,17 +4,20 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from cyberWatch.api.models import TracerouteRequest, ok
 from cyberWatch.api.utils.db import pg_dep
 from cyberWatch.workers.worker import run_traceroute
 from cyberWatch.enrichment.asn_lookup import lookup_asn, AsnInfo
+from cyberWatch.logging_config import get_logger
 
+logger = get_logger("api")
 router = APIRouter(prefix="/traceroute", tags=["traceroute"])
 
 
@@ -262,15 +265,56 @@ async def _run_mtr(target: str) -> dict:
 
 
 @router.post("/run")
-async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep)):
+async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), request: Request = None):
     """Run traceroute with enhanced analytics and save to database."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Traceroute requested",
+        extra={
+            "request_id": request_id,
+            "user_input": {"target": req.target},
+            "action": "traceroute_start",
+        }
+    )
+    
     started_at = datetime.utcnow()
     
     try:
         result = await run_traceroute(req.target)
+        logger.info(
+            "Traceroute execution completed",
+            extra={
+                "request_id": request_id,
+                "target": req.target,
+                "tool": result.tool,
+                "success": result.success,
+                "hop_count": len(result.hops),
+                "outcome": "success",
+            }
+        )
     except RuntimeError as exc:
+        logger.error(
+            f"Traceroute tool unavailable: {str(exc)}",
+            extra={
+                "request_id": request_id,
+                "target": req.target,
+                "outcome": "error",
+                "error_type": "tool_unavailable",
+            }
+        )
         _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
     except Exception as exc:
+        logger.error(
+            f"Traceroute failed: {str(exc)}",
+            exc_info=True,
+            extra={
+                "request_id": request_id,
+                "target": req.target,
+                "outcome": "error",
+                "error_type": type(exc).__name__,
+            }
+        )
         _http_error(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Traceroute failed: {exc}")
     
     completed_at = datetime.utcnow()
@@ -301,8 +345,26 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep)):
             enriched_hops,
             source="web_ui",
         )
+        logger.info(
+            "Measurement saved to database",
+            extra={
+                "request_id": request_id,
+                "measurement_id": measurement_id,
+                "target": req.target,
+                "hop_count": len(result.hops),
+                "enriched": len(enriched_hops) > 0,
+            }
+        )
     except Exception as exc:
-        # Log but don't fail the request
+        logger.error(
+            f"Failed to save measurement: {str(exc)}",
+            exc_info=True,
+            extra={
+                "request_id": request_id,
+                "target": req.target,
+                "outcome": "db_error",
+            }
+        )
         measurement_id = None
     
     # Build response
@@ -332,8 +394,19 @@ async def get_history(
     target: Optional[str] = Query(None, description="Filter by target IP/hostname"),
     limit: int = Query(50, ge=1, le=200),
     pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
 ):
     """Get traceroute measurement history."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Fetching traceroute history",
+        extra={
+            "request_id": request_id,
+            "user_input": {"target": target, "limit": limit},
+        }
+    )
+    
     if target:
         rows = await pool.fetch(
             """

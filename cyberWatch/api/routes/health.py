@@ -8,7 +8,9 @@ from neo4j import AsyncDriver
 from cyberWatch.api.models import ok
 from cyberWatch.api.utils.db import neo4j_dep, pg_dep
 from cyberWatch.workers.worker import _pick_tool
+from cyberWatch.logging_config import get_logger
 
+logger = get_logger("api")
 router = APIRouter(prefix="/health", tags=["health"])
 
 

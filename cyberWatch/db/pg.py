@@ -2,14 +2,41 @@
 from __future__ import annotations
 
 import asyncpg
+import time
 from asyncpg import Connection, Pool
 from typing import Iterable, List, Optional, Sequence
 from datetime import datetime
 
+from cyberWatch.logging_config import get_logger
+
+logger = get_logger("db")
+
 
 async def create_pool(dsn: str) -> Pool:
     """Initialize an asyncpg connection pool."""
-    return await asyncpg.create_pool(dsn)
+    # Sanitize DSN for logging (remove password)
+    dsn_parts = dsn.split("@")
+    sanitized_dsn = dsn_parts[-1] if "@" in dsn else "local"
+    
+    logger.info(
+        "Creating PostgreSQL connection pool",
+        extra={"dsn_host": sanitized_dsn, "action": "pool_create"}
+    )
+    
+    try:
+        pool = await asyncpg.create_pool(dsn)
+        logger.info(
+            "PostgreSQL pool created successfully",
+            extra={"dsn_host": sanitized_dsn, "outcome": "success"}
+        )
+        return pool
+    except Exception as exc:
+        logger.error(
+            f"Failed to create PostgreSQL pool: {str(exc)}",
+            exc_info=True,
+            extra={"dsn_host": sanitized_dsn, "outcome": "error"}
+        )
+        raise
 
 
 async def _get_or_create_target(
@@ -47,43 +74,93 @@ async def insert_measurement(
     source: Optional[str] = None,
 ) -> int:
     """Insert a measurement and its hops; returns measurement id."""
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            target_id = await _get_or_create_target(conn, target_ip, source=source)
-            measurement_id = await conn.fetchval(
-                """
-                INSERT INTO measurements (target_id, tool, started_at, completed_at, success, raw_output)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id
-                """,
-                target_id,
-                tool,
-                started_at,
-                completed_at,
-                success,
-                raw_output,
-            )
-            for hop_number, hop_ip, rtt_ms in hops:
-                await conn.execute(
+    start_time = time.time()
+    hops_list = list(hops)
+    
+    logger.info(
+        "Inserting measurement",
+        extra={
+            "target": target_ip,
+            "tool": tool,
+            "hop_count": len(hops_list),
+            "success": success,
+            "action": "measurement_insert",
+        }
+    )
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                target_id = await _get_or_create_target(conn, target_ip, source=source)
+                measurement_id = await conn.fetchval(
                     """
-                    INSERT INTO hops (measurement_id, hop_number, hop_ip, rtt_ms)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO measurements (target_id, tool, started_at, completed_at, success, raw_output)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
                     """,
-                    measurement_id,
-                    hop_number,
-                    hop_ip,
-                    rtt_ms,
+                    target_id,
+                    tool,
+                    started_at,
+                    completed_at,
+                    success,
+                    raw_output,
                 )
-            await conn.execute(
-                "UPDATE targets SET last_seen = $1 WHERE id = $2",
-                completed_at or started_at,
-                target_id,
-            )
-            return int(measurement_id)
+                for hop_number, hop_ip, rtt_ms in hops_list:
+                    await conn.execute(
+                        """
+                        INSERT INTO hops (measurement_id, hop_number, hop_ip, rtt_ms)
+                        VALUES ($1, $2, $3, $4)
+                        """,
+                        measurement_id,
+                        hop_number,
+                        hop_ip,
+                        rtt_ms,
+                    )
+                await conn.execute(
+                    "UPDATE targets SET last_seen = $1 WHERE id = $2",
+                    completed_at or started_at,
+                    target_id,
+                )
+                
+                duration = time.time() - start_time
+                logger.info(
+                    "Measurement inserted successfully",
+                    extra={
+                        "measurement_id": measurement_id,
+                        "target": target_ip,
+                        "target_id": target_id,
+                        "hop_count": len(hops_list),
+                        "rows_affected": len(hops_list) + 2,  # measurement + hops + target update
+                        "duration": round(duration * 1000, 2),
+                        "outcome": "success",
+                    }
+                )
+                
+                return int(measurement_id)
+    except Exception as exc:
+        duration = time.time() - start_time
+        logger.error(
+            f"Failed to insert measurement: {str(exc)}",
+            exc_info=True,
+            extra={
+                "target": target_ip,
+                "tool": tool,
+                "hop_count": len(hops_list),
+                "duration": round(duration * 1000, 2),
+                "outcome": "error",
+            }
+        )
+        raise
 
 
 async def fetch_unenriched_hops(pool: Pool, limit: int = 200) -> List[asyncpg.Record]:
     """Fetch hops lacking ASN enrichment."""
+    logger.debug(
+        "Fetching unenriched hops",
+        extra={"limit": limit, "action": "fetch_unenriched"}
+    )
+    
+    start_time = time.time()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -98,6 +175,15 @@ async def fetch_unenriched_hops(pool: Pool, limit: int = 200) -> List[asyncpg.Re
             """,
             limit,
         )
+        duration = time.time() - start_time
+        logger.info(
+            "Fetched unenriched hops",
+            extra={
+                "rows_fetched": len(rows),
+                "duration": round(duration * 1000, 2),
+                "outcome": "success",
+            }
+        )
         return list(rows)
 
 
@@ -111,6 +197,11 @@ async def update_hop_enrichment(
     country_code: Optional[str],
 ) -> None:
     """Persist enrichment details for a hop."""
+    logger.debug(
+        "Updating hop enrichment",
+        extra={"hop_id": hop_id, "asn": asn, "action": "hop_enrich"}
+    )
+    
     async with pool.acquire() as conn:
         await conn.execute(
             """

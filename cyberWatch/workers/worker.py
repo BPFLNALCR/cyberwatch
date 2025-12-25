@@ -5,6 +5,8 @@ import asyncio
 import os
 import re
 import shutil
+import time
+import uuid
 from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
 
@@ -12,6 +14,9 @@ from pydantic import BaseModel, IPvAnyAddress
 
 from cyberWatch.db.pg import create_pool, insert_measurement
 from cyberWatch.scheduler.queue import TargetQueue, TargetTask
+from cyberWatch.logging_config import get_logger
+
+logger = get_logger("worker")
 
 class HopModel(BaseModel):
     hop: int
@@ -46,6 +51,16 @@ SCAMPER_HOP_PATTERN = re.compile(
 
 async def _run_subprocess(cmd: Sequence[str], stdin_data: Optional[str] = None) -> Tuple[int, str]:
     """Run a subprocess and capture stdout. Optionally pass stdin data."""
+    cmd_str = " ".join(cmd)
+    logger.debug(
+        f"Executing subprocess command",
+        extra={
+            "command": cmd_str,
+            "has_stdin": stdin_data is not None,
+        }
+    )
+    
+    start_time = time.time()
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE if stdin_data else None,
@@ -56,15 +71,42 @@ async def _run_subprocess(cmd: Sequence[str], stdin_data: Optional[str] = None) 
     stdin_bytes = stdin_data.encode("utf-8") if stdin_data else None
     stdout, _ = await process.communicate(input=stdin_bytes)
     output = stdout.decode("utf-8", errors="replace") if stdout else ""
-    return process.returncode or 0, output
+    returncode = process.returncode or 0
+    duration = time.time() - start_time
+    
+    logger.info(
+        f"Subprocess completed",
+        extra={
+            "command": cmd_str,
+            "exit_code": returncode,
+            "duration": round(duration * 1000, 2),
+            "output_length": len(output),
+            "outcome": "success" if returncode == 0 else "error",
+        }
+    )
+    
+    if returncode != 0:
+        logger.warning(
+            f"Subprocess exited with non-zero code",
+            extra={
+                "command": cmd_str,
+                "exit_code": returncode,
+                "stderr_output": output[:500],  # First 500 chars
+            }
+        )
+    
+    return returncode, output
 
 
 def _pick_tool() -> str:
     """Choose scamper if available, otherwise traceroute."""
     if shutil.which("scamper"):
+        logger.debug("Selected scamper for traceroute measurements")
         return "scamper"
     if shutil.which("traceroute"):
+        logger.debug("Selected traceroute for measurements")
         return "traceroute"
+    logger.error("No traceroute tool available", extra={"outcome": "error"})
     raise RuntimeError("Neither scamper nor traceroute is available on PATH")
 
 
@@ -77,13 +119,18 @@ def _parse_traceroute_hops(output: str) -> List[HopModel]:
       3  10.0.0.1 (10.0.0.1)  5.123 ms  4.987 ms  5.001 ms
     """
     hops: List[HopModel] = []
+    lines_parsed = 0
+    lines_matched = 0
+    
     for line in output.splitlines():
         line = line.strip()
         if not line or line.startswith("traceroute"):
             continue
         
+        lines_parsed += 1
         match = TRACEROUTE_PATTERN.match(line)
         if match:
+            lines_matched += 1
             hop_num = int(match.group("hop"))
             ip_raw = match.group("ip").strip()
             # Handle hostnames with IP in parens: "host.example.com (1.2.3.4)"
@@ -111,6 +158,18 @@ def _parse_traceroute_hops(output: str) -> List[HopModel]:
                 hop_num = int(parts[0])
                 if all(p == "*" for p in parts[1:]):
                     hops.append(HopModel(hop=hop_num, ip=None, rtt_ms=None))
+                    lines_matched += 1
+    
+    logger.debug(
+        "Parsed traceroute output",
+        extra={
+            "tool": "traceroute",
+            "lines_parsed": lines_parsed,
+            "lines_matched": lines_matched,
+            "hops_found": len(hops),
+        }
+    )
+    
     return hops
 
 
@@ -123,13 +182,18 @@ def _parse_scamper_hops(output: str) -> List[HopModel]:
       2  10.0.0.1  5.123 ms
     """
     hops: List[HopModel] = []
+    lines_parsed = 0
+    lines_matched = 0
+    
     for line in output.splitlines():
         line = line.strip()
         if not line or line.startswith("trace") or line.startswith("scamper"):
             continue
         
+        lines_parsed += 1
         match = SCAMPER_HOP_PATTERN.match(line)
         if match:
+            lines_matched += 1
             hop_num = int(match.group("hop"))
             ip_raw = match.group("ip").strip()
             ip = None if "*" in ip_raw else ip_raw
@@ -138,11 +202,30 @@ def _parse_scamper_hops(output: str) -> List[HopModel]:
             except ValueError:
                 rtt = None
             hops.append(HopModel(hop=hop_num, ip=ip, rtt_ms=rtt))
+    
+    logger.debug(
+        "Parsed scamper output",
+        extra={
+            "tool": "scamper",
+            "lines_parsed": lines_parsed,
+            "lines_matched": lines_matched,
+            "hops_found": len(hops),
+        }
+    )
+    
     return hops
 
 
 async def run_traceroute(target: str) -> MeasurementResult:
     """Run traceroute/scamper and normalize output."""
+    logger.info(
+        "Starting traceroute",
+        extra={
+            "target": target,
+            "action": "traceroute_start",
+        }
+    )
+    
     tool = _pick_tool()
     started_at = datetime.utcnow()
     
@@ -158,6 +241,19 @@ async def run_traceroute(target: str) -> MeasurementResult:
         hops = _parse_traceroute_hops(output)
     
     success = code == 0 and len(hops) > 0
+    
+    logger.info(
+        "Traceroute completed",
+        extra={
+            "target": target,
+            "tool": tool,
+            "success": success,
+            "hop_count": len(hops),
+            "exit_code": code,
+            "outcome": "success" if success else "failed",
+        }
+    )
+    
     return MeasurementResult(
         target=target,
         timestamp=started_at,
@@ -177,31 +273,97 @@ class Worker:
         self.pg_dsn = dsn
 
     async def run(self) -> None:
+        logger.info(
+            "Worker starting",
+            extra={
+                "component": "worker",
+                "state": "starting",
+                "pg_dsn": self.pg_dsn.split("@")[-1] if "@" in self.pg_dsn else "local",  # Sanitize DSN
+            }
+        )
+        
         pool = await create_pool(self.pg_dsn)
+        
+        logger.info(
+            "Worker ready",
+            extra={
+                "component": "worker",
+                "state": "ready",
+            }
+        )
+        
         try:
             while True:
                 task = await self.queue.dequeue(timeout=5)
                 if task is None:
+                    logger.debug("No tasks in queue, waiting...")
                     continue
                 await self.handle_task(pool, task)
+        except KeyboardInterrupt:
+            logger.info("Worker interrupted by user", extra={"state": "interrupted"})
+        except Exception as exc:
+            logger.error(
+                f"Worker error: {str(exc)}",
+                exc_info=True,
+                extra={"outcome": "error", "error_type": type(exc).__name__}
+            )
         finally:
+            logger.info("Worker shutting down", extra={"state": "shutdown"})
             await pool.close()
             await self.queue.close()
+            logger.info("Worker stopped", extra={"state": "stopped"})
 
     async def handle_task(self, pool, task: TargetTask) -> None:
-        result = await run_traceroute(str(task.target_ip))
-        hops_payload = [(hop.hop, hop.ip, hop.rtt_ms) for hop in result.hops]
-        await insert_measurement(
-            pool,
-            target_ip=str(result.target),
-            tool=result.tool,
-            started_at=result.timestamp,
-            completed_at=datetime.utcnow(),
-            success=result.success,
-            raw_output=result.raw_output,
-            hops=hops_payload,
-            source=task.source,
+        task_id = str(uuid.uuid4())
+        
+        logger.info(
+            "Processing task",
+            extra={
+                "task_id": task_id,
+                "target": str(task.target_ip),
+                "source": task.source,
+                "action": "task_start",
+            }
         )
+        
+        try:
+            result = await run_traceroute(str(task.target_ip))
+            hops_payload = [(hop.hop, hop.ip, hop.rtt_ms) for hop in result.hops]
+            
+            await insert_measurement(
+                pool,
+                target_ip=str(result.target),
+                tool=result.tool,
+                started_at=result.timestamp,
+                completed_at=datetime.utcnow(),
+                success=result.success,
+                raw_output=result.raw_output,
+                hops=hops_payload,
+                source=task.source,
+            )
+            
+            logger.info(
+                "Task completed successfully",
+                extra={
+                    "task_id": task_id,
+                    "target": str(task.target_ip),
+                    "tool": result.tool,
+                    "hop_count": len(result.hops),
+                    "success": result.success,
+                    "outcome": "success",
+                }
+            )
+        except Exception as exc:
+            logger.error(
+                f"Task failed: {str(exc)}",
+                exc_info=True,
+                extra={
+                    "task_id": task_id,
+                    "target": str(task.target_ip),
+                    "outcome": "error",
+                    "error_type": type(exc).__name__,
+                }
+            )
 
 
 async def main() -> None:

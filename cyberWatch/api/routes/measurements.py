@@ -4,11 +4,13 @@ from __future__ import annotations
 from typing import Optional
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from cyberWatch.api.models import MeasurementDetail, MeasurementSummary, ok, err
 from cyberWatch.api.utils.db import pg_dep
+from cyberWatch.logging_config import get_logger
 
+logger = get_logger("api")
 router = APIRouter(prefix="/measurements", tags=["measurements"])
 
 
@@ -28,7 +30,15 @@ async def _fetch_measurement(pool: asyncpg.Pool, mid: int) -> Optional[asyncpg.R
 async def latest_measurement(
     target: str = Query(..., description="IP or domain of target"),
     pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
 ):
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Fetching latest measurement",
+        extra={"request_id": request_id, "user_input": {"target": target}}
+    )
+    
     row = await pool.fetchrow(
         """
         SELECT m.id, t.target_ip as target, m.tool, m.started_at, m.completed_at, m.success, m.raw_output

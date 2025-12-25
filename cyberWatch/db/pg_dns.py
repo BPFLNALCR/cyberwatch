@@ -1,12 +1,17 @@
 """Async helpers for DNS query ingestion and aggregation."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, List, Optional, Sequence
 
 import asyncpg
 from asyncpg import Pool
+
+from cyberWatch.logging_config import get_logger
+
+logger = get_logger("db")
 
 
 @dataclass
@@ -96,15 +101,53 @@ async def insert_dns_queries(pool: Pool, queries: Sequence[DNSQueryRecord]) -> N
     """Persist a batch of DNS queries."""
     if not queries:
         return
+    
+    logger.info(
+        "Inserting DNS queries batch",
+        extra={"batch_size": len(queries), "action": "dns_insert"}
+    )
+    
+    start_time = time.time()
     records = [(q.domain, q.client_ip, q.qtype, q.queried_at) for q in queries]
-    async with pool.acquire() as conn:
-        await conn.executemany(SQL_INSERT_QUERIES, records)
+    
+    try:
+        async with pool.acquire() as conn:
+            await conn.executemany(SQL_INSERT_QUERIES, records)
+        
+        duration = time.time() - start_time
+        logger.info(
+            "DNS queries inserted",
+            extra={
+                "rows_affected": len(records),
+                "duration": round(duration * 1000, 2),
+                "outcome": "success",
+            }
+        )
+    except Exception as exc:
+        duration = time.time() - start_time
+        logger.error(
+            f"Failed to insert DNS queries: {str(exc)}",
+            exc_info=True,
+            extra={
+                "batch_size": len(queries),
+                "duration": round(duration * 1000, 2),
+                "outcome": "error",
+            }
+        )
+        raise
 
 
 async def upsert_dns_targets(pool: Pool, targets: Sequence[DNSTargetRecord]) -> None:
     """Upsert DNS targets aggregated by domain+IP."""
     if not targets:
         return
+    
+    logger.info(
+        "Upserting DNS targets batch",
+        extra={"batch_size": len(targets), "action": "dns_upsert"}
+    )
+    
+    start_time = time.time()
     records = [
         (
             t.domain,
@@ -117,8 +160,32 @@ async def upsert_dns_targets(pool: Pool, targets: Sequence[DNSTargetRecord]) -> 
         )
         for t in targets
     ]
-    async with pool.acquire() as conn:
-        await conn.executemany(SQL_UPSERT_TARGETS, records)
+    
+    try:
+        async with pool.acquire() as conn:
+            await conn.executemany(SQL_UPSERT_TARGETS, records)
+        
+        duration = time.time() - start_time
+        logger.info(
+            "DNS targets upserted",
+            extra={
+                "rows_affected": len(records),
+                "duration": round(duration * 1000, 2),
+                "outcome": "success",
+            }
+        )
+    except Exception as exc:
+        duration = time.time() - start_time
+        logger.error(
+            f"Failed to upsert DNS targets: {str(exc)}",
+            exc_info=True,
+            extra={
+                "batch_size": len(targets),
+                "duration": round(duration * 1000, 2),
+                "outcome": "error",
+            }
+        )
+        raise
 
 
 async def touch_target(pool: Pool, target_ip: str, *, source: str = "dns", seen_at: Optional[datetime] = None) -> None:

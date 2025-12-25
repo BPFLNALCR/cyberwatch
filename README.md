@@ -106,6 +106,67 @@ cd cyberwatch
   - `CYBERWATCH_API_BASE` for the UI to reach the API.
   - `CYBERWATCH_DNS_CONFIG` to point the collector to a non-default config path.
 
+### Logging Configuration
+cyberWatch includes comprehensive structured logging in JSONL format for all components. Logging is **enabled by default** and can be configured via environment variables:
+
+**Environment Variables:**
+- `CYBERWATCH_LOG_LEVEL`: Set log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). Default: `INFO`
+- `CYBERWATCH_LOG_FILE`: Path to JSONL log file. Default: `logs/cyberwatch.jsonl`
+- `CYBERWATCH_LOG_MAX_BYTES`: Maximum bytes per log file before rotation. Default: `104857600` (100MB)
+
+**Log Output Format:**
+Logs are written in JSON Lines format with structured fields:
+```json
+{"timestamp": "2025-12-25T10:30:45.123456Z", "level": "INFO", "component": "api", "logger": "cyberwatch.api", "message": "Request completed", "request_id": "abc-123", "method": "POST", "path": "/traceroute/run", "status_code": 200, "duration": 1234.56, "outcome": "success"}
+```
+
+**What's Logged:**
+- **API**: All HTTP requests with method, path, query params, status codes, duration, and unique request IDs for correlation
+- **Workers**: Task processing, subprocess execution (traceroute/scamper commands), stdout/stderr, exit codes, parsing results
+- **Database**: Connection pool creation, query execution timing, transaction outcomes, bulk operation row counts
+- **DNS Collector**: Collection cycles, query filtering, DNS resolution results, target enqueueing
+- **Enrichment**: ASN lookups, PeeringDB API calls, batch processing progress, graph building operations
+- **Errors**: Full exception tracebacks with context for debugging
+
+**Log Rotation:**
+Logs automatically rotate when reaching `CYBERWATCH_LOG_MAX_BYTES` (default 100MB), keeping 10 backup files by default. Old logs are named `cyberwatch.jsonl.1`, `cyberwatch.jsonl.2`, etc.
+
+**Example Configuration in Systemd:**
+Add to your systemd unit files (e.g., `/etc/systemd/system/cyberWatch-api.service`):
+```ini
+[Service]
+Environment="CYBERWATCH_LOG_LEVEL=DEBUG"
+Environment="CYBERWATCH_LOG_FILE=/var/log/cyberwatch/api.jsonl"
+Environment="CYBERWATCH_LOG_MAX_BYTES=52428800"
+```
+
+**Viewing Logs:**
+```bash
+# View all logs (JSONL format)
+cat logs/cyberwatch.jsonl
+
+# Follow logs in real-time
+tail -f logs/cyberwatch.jsonl
+
+# Parse and pretty-print JSON logs
+tail -f logs/cyberwatch.jsonl | jq '.'
+
+# Filter by component
+grep '"component":"api"' logs/cyberwatch.jsonl | jq '.'
+
+# Filter by log level
+grep '"level":"ERROR"' logs/cyberwatch.jsonl | jq '.'
+
+# Find all logs for a specific request
+grep '"request_id":"abc-123"' logs/cyberwatch.jsonl | jq '.'
+
+# Find all failed traceroute attempts
+grep '"outcome":"error"' logs/cyberwatch.jsonl | grep traceroute | jq '.'
+```
+
+**Security Note:**
+Sensitive data (passwords, API tokens) is automatically redacted from logs. You'll see `***REDACTED***` in place of these values.
+
 ## Running cyberWatch
 **Systemd (installed by the script)**
 - API: `sudo systemctl status|start|stop cyberWatch-api.service` (FastAPI on port 8000).

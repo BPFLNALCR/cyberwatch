@@ -5,14 +5,16 @@ import asyncio
 from typing import List, Optional
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from neo4j import AsyncDriver
 
 from cyberWatch.api.models import ok
 from cyberWatch.api.utils.db import neo4j_dep, pg_dep
 from cyberWatch.enrichment.asn_lookup import lookup_asn
 from cyberWatch.enrichment.peeringdb import fetch_asn_org
+from cyberWatch.logging_config import get_logger
 
+logger = get_logger("api")
 router = APIRouter(prefix="/asn", tags=["asn"])
 
 
@@ -96,8 +98,15 @@ async def _get_asn_from_db(pool: asyncpg.Pool, asn: int) -> Optional[dict]:
 
 
 @router.get("/{asn}")
-async def get_asn(asn: int, pool: asyncpg.Pool = Depends(pg_dep)):
+async def get_asn(asn: int, pool: asyncpg.Pool = Depends(pg_dep), request: Request = None):
     """Get ASN information with graceful fallback when Neo4j is unavailable."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "ASN lookup requested",
+        extra={"request_id": request_id, "user_input": {"asn": asn}}
+    )
+    
     # Try Neo4j first
     try:
         from cyberWatch.api.utils.db import _driver

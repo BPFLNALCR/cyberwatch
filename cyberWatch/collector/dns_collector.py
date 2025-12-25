@@ -23,9 +23,11 @@ from cyberWatch.db.pg_dns import (
     upsert_dns_targets,
 )
 from cyberWatch.scheduler.queue import TargetQueue, TargetTask
+from cyberWatch.logging_config import get_logger
 
 install_rich_traceback()
 console = Console()
+logger = get_logger("collector")
 
 
 async def resolve_domain(
@@ -69,11 +71,13 @@ async def resolve_domain(
 def _ignore_query(cfg: DNSCollectorConfig, query: DNSQuery) -> bool:
     domain = query.domain.lower().rstrip(".")
     if cfg.filters.max_domain_length and len(domain) > cfg.filters.max_domain_length:
+        logger.debug(f"Ignoring domain due to length: {domain}")
         return True
     if domain.endswith((".in-addr.arpa", ".ip6.arpa")):
         return True
     for suffix in cfg.filters.ignore_domains_suffix:
         if domain.endswith(suffix.lower()):
+            logger.debug(f"Ignoring domain due to suffix filter: {domain}")
             return True
     if cfg.filters.ignore_qtypes and query.qtype:
         if query.qtype.upper() in {q.upper() for q in cfg.filters.ignore_qtypes}:
@@ -86,7 +90,14 @@ def _ignore_query(cfg: DNSCollectorConfig, query: DNSQuery) -> bool:
 
 async def _resolve_batch(cfg: DNSCollectorConfig, queries: List[DNSQuery]) -> List[ResolvedTarget]:
     if not cfg.dns_resolution.enabled:
+        logger.info("DNS resolution disabled in config")
         return []
+    
+    logger.info(
+        "Starting DNS resolution batch",
+        extra={"batch_size": len(queries), "action": "dns_resolve"}
+    )
+    
     resolver = dns.asyncresolver.Resolver()
     resolver.lifetime = cfg.dns_resolution.timeout_seconds
     sem = asyncio.Semaphore(20)
@@ -103,10 +114,24 @@ async def _resolve_batch(cfg: DNSCollectorConfig, queries: List[DNSQuery]) -> Li
     tasks = [_resolve_one(q) for q in queries]
     results_nested = await asyncio.gather(*tasks, return_exceptions=True)
     resolved: List[ResolvedTarget] = []
+    errors = 0
+    
     for item in results_nested:
         if isinstance(item, Exception):
+            errors += 1
             continue
         resolved.extend(cast(List[ResolvedTarget], item))
+    
+    logger.info(
+        "DNS resolution batch completed",
+        extra={
+            "queries": len(queries),
+            "resolved": len(resolved),
+            "errors": errors,
+            "outcome": "success",
+        }
+    )
+    
     return resolved
 
 
@@ -116,8 +141,19 @@ async def process_cycle(
     pool,
     queue: TargetQueue,
 ) -> dict:
+    logger.info("Starting DNS collection cycle", extra={"action": "cycle_start"})
+    
     queries_raw = await source.fetch_new()
     filtered = [q for q in queries_raw if not _ignore_query(cfg, q)]
+    
+    logger.info(
+        "Queries filtered",
+        extra={
+            "raw_count": len(queries_raw),
+            "filtered_count": len(filtered),
+            "filtered_out": len(queries_raw) - len(filtered),
+        }
+    )
 
     await insert_dns_queries(
         pool,
@@ -162,18 +198,32 @@ async def process_cycle(
         await queue.enqueue(TargetTask(target_ip=ip_str, source="dns", domain=target.domain))
         seen_ips.add(ip_str)
         enqueued += 1
-
-    return {
+    
+    stats = {
         "raw": len(queries_raw),
         "filtered": len(filtered),
         "resolved": len(resolved),
         "enqueued": enqueued,
     }
+    
+    logger.info(
+        "DNS collection cycle completed",
+        extra={
+            "queries_raw": stats["raw"],
+            "queries_filtered": stats["filtered"],
+            "targets_resolved": stats["resolved"],
+            "targets_enqueued": stats["enqueued"],
+            "outcome": "success",
+        }
+    )
+
+    return stats
 
 
 async def run_collector(config_path: str) -> None:
     cfg = DNSCollectorConfig.load(config_path)
     if not cfg.enabled:
+        logger.warning("DNS collector disabled in config; exiting")
         console.print("[yellow]DNS collector disabled in config; exiting.")
         return
 
@@ -181,7 +231,17 @@ async def run_collector(config_path: str) -> None:
     pool = await create_pool(os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch"))
     queue = TargetQueue()
 
+    logger.info(
+        "DNS collector starting",
+        extra={
+            "component": "collector",
+            "state": "starting",
+            "poll_interval": cfg.poll_interval,
+            "source_type": cfg.source.type,
+        }
+    )
     console.print("[green]Starting cyberWatch DNS collector", highlight=False)
+    
     try:
         while True:
             try:
@@ -190,11 +250,18 @@ async def run_collector(config_path: str) -> None:
                     f"queries={stats['raw']} filtered={stats['filtered']} resolved={stats['resolved']} enqueued={stats['enqueued']}"
                 )
             except asyncio.CancelledError:
+                logger.info("DNS collector interrupted", extra={"state": "interrupted"})
                 raise
             except Exception as exc:
+                logger.error(
+                    f"DNS collection cycle error: {str(exc)}",
+                    exc_info=True,
+                    extra={"outcome": "error", "error_type": type(exc).__name__}
+                )
                 console.log(f"[red]Cycle error:[/red] {exc}")
             await asyncio.sleep(cfg.poll_interval)
     finally:
+        logger.info("DNS collector shutting down", extra={"state": "shutdown"})
         if hasattr(source, "close"):
             close_fn = getattr(source, "close")
             if asyncio.iscoroutinefunction(close_fn):
@@ -203,6 +270,7 @@ async def run_collector(config_path: str) -> None:
                 close_fn()  # type: ignore[misc]
         await queue.close()
         await pool.close()
+        logger.info("DNS collector stopped", extra={"state": "stopped"})
 
 
 def parse_args() -> argparse.Namespace:

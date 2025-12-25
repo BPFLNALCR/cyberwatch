@@ -13,8 +13,10 @@ from rich.console import Console
 
 from cyberWatch.db.neo4j import get_driver
 from cyberWatch.db import pg
+from cyberWatch.logging_config import get_logger
 
 console = Console()
+logger = get_logger("enrichment")
 
 
 class HopNode(BaseModel):
@@ -82,13 +84,21 @@ async def _merge_edge(session, edge: EdgeModel) -> None:
 
 
 async def process_measurement(pool, driver: AsyncDriver, measurement_id: int, observed_at: datetime) -> None:
+    logger.info(
+        "Building graph for measurement",
+        extra={"measurement_id": measurement_id, "action": "graph_build"}
+    )
+    
     hops = await pg.fetch_hops_for_measurement(pool, measurement_id)
     if not hops:
         await pg.mark_measurement_graph_built(pool, measurement_id)
+        logger.debug(f"No hops found for measurement {measurement_id}")
         return
+    
     edges = _build_edges(hops, observed_at)
     if not edges:
         await pg.mark_measurement_graph_built(pool, measurement_id)
+        logger.debug(f"No edges to build for measurement {measurement_id}")
         return
 
     async with driver.session() as session:
@@ -98,7 +108,18 @@ async def process_measurement(pool, driver: AsyncDriver, measurement_id: int, ob
             if a.asn > b.asn:
                 edge = EdgeModel(a=b, b=a, observed_at=edge.observed_at, rtt_ms=edge.rtt_ms)
             await _merge_edge(session, edge)
+    
     await pg.mark_measurement_graph_built(pool, measurement_id)
+    
+    logger.info(
+        "Graph built for measurement",
+        extra={
+            "measurement_id": measurement_id,
+            "hop_count": len(hops),
+            "edge_count": len(edges),
+            "outcome": "success",
+        }
+    )
     console.print(f"[green]Graph updated for measurement {measurement_id}")
 
 
@@ -112,18 +133,35 @@ async def run_once(pool, driver: AsyncDriver) -> bool:
 
 
 async def main_loop() -> None:
+    logger.info(
+        "Graph builder starting",
+        extra={"component": "graph_builder", "state": "starting"}
+    )
     console.print("[cyan]Starting graph builder")
+    
     pg_dsn = os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch")
     pool = await pg.create_pool(pg_dsn)
     driver: AsyncDriver = get_driver()
+    
     try:
         while True:
             had_work = await run_once(pool, driver)
             if not had_work:
+                logger.debug("No measurements to build, sleeping")
                 await asyncio.sleep(10)
+    except KeyboardInterrupt:
+        logger.info("Graph builder interrupted", extra={"state": "interrupted"})
+    except Exception as exc:
+        logger.error(
+            f"Graph builder error: {str(exc)}",
+            exc_info=True,
+            extra={"outcome": "error"}
+        )
     finally:
+        logger.info("Graph builder shutting down", extra={"state": "shutdown"})
         await pool.close()
         await driver.close()
+        logger.info("Graph builder stopped", extra={"state": "stopped"})
 
 
 if __name__ == "__main__":

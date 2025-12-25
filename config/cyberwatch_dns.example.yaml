@@ -24,3 +24,9 @@ dns_resolution:
   enabled: true
   timeout_seconds: 2
   max_ips_per_domain: 4
+
+# Logging Configuration (Environment Variables)
+# These can be set in systemd unit files or shell environment
+# CYBERWATCH_LOG_LEVEL: INFO|DEBUG|WARNING|ERROR|CRITICAL (default: INFO)
+# CYBERWATCH_LOG_FILE: Path to JSONL log file (default: logs/cyberwatch.jsonl)
+# CYBERWATCH_LOG_MAX_BYTES: Max bytes per log file before rotation (default: 104857600 = 100MB)

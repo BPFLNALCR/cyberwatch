@@ -6,19 +6,33 @@ from collections import defaultdict
 from typing import Dict, List
 
 import asyncpg
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from cyberWatch.api.models import ok
 from cyberWatch.api.utils.db import pg_dep
 from cyberWatch.db.pg_dns import fetch_top_domains, fetch_top_targets
 from cyberWatch.enrichment.asn_lookup import lookup_asn
+from cyberWatch.logging_config import get_logger
 
+logger = get_logger("api")
 router = APIRouter(prefix="/dns", tags=["dns"])
 
 
 @router.get("/top-domains")
-async def top_domains(limit: int = Query(20, ge=1, le=500), pool: asyncpg.Pool = Depends(pg_dep)):
+async def top_domains(limit: int = Query(20, ge=1, le=500), pool: asyncpg.Pool = Depends(pg_dep), request: Request = None):
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Fetching top domains",
+        extra={"request_id": request_id, "user_input": {"limit": limit}}
+    )
+    
     rows = await fetch_top_domains(pool, limit=limit)
+    
+    logger.info(
+        "Top domains fetched",
+        extra={"request_id": request_id, "count": len(rows), "outcome": "success"}
+    )
     data = [
         {
             "domain": r["domain"],

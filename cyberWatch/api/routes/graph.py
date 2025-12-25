@@ -4,12 +4,14 @@ from __future__ import annotations
 from typing import List, Optional
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from neo4j import AsyncDriver
 
 from cyberWatch.api.models import ok
 from cyberWatch.api.utils.db import pg_dep
+from cyberWatch.logging_config import get_logger
 
+logger = get_logger("api")
 router = APIRouter(prefix="/graph", tags=["graph"])
 
 
