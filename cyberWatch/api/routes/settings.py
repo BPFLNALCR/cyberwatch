@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from cyberWatch.api.models import ok, err
-from cyberWatch.api.utils.db import pg_dep
+from cyberWatch.api.utils.db import pg_dep, neo4j_dep
 from cyberWatch.db.settings import (
     get_pihole_settings,
     save_pihole_settings,
@@ -337,3 +337,242 @@ async def test_pihole_connection(
             "api_version": "unknown",
             "message": f"Error: {str(e)}",
         })
+
+
+@router.post("/clear-measurements")
+async def clear_measurements(
+    pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
+):
+    """Clear all measurement data (targets, measurements, hops)."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Clearing measurement data",
+        extra={"request_id": request_id, "action": "clear_measurements"}
+    )
+    
+    try:
+        async with pool.acquire() as conn:
+            # Count rows before clearing
+            targets_count = await conn.fetchval("SELECT COUNT(*) FROM targets")
+            measurements_count = await conn.fetchval("SELECT COUNT(*) FROM measurements")
+            hops_count = await conn.fetchval("SELECT COUNT(*) FROM hops")
+            
+            # Clear tables with CASCADE to handle foreign keys
+            await conn.execute("TRUNCATE TABLE targets CASCADE")
+            
+            logger.info(
+                "Measurement data cleared successfully",
+                extra={
+                    "request_id": request_id,
+                    "targets_cleared": targets_count,
+                    "measurements_cleared": measurements_count,
+                    "hops_cleared": hops_count,
+                    "outcome": "success"
+                }
+            )
+            
+            return ok({
+                "success": True,
+                "message": f"Cleared {targets_count} targets, {measurements_count} measurements, {hops_count} hops",
+                "stats": {
+                    "targets": targets_count,
+                    "measurements": measurements_count,
+                    "hops": hops_count,
+                }
+            })
+    
+    except Exception as exc:
+        logger.error(
+            f"Failed to clear measurement data: {str(exc)}",
+            exc_info=True,
+            extra={"request_id": request_id, "outcome": "error"}
+        )
+        return err(str(exc))
+
+
+@router.post("/clear-dns")
+async def clear_dns(
+    pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
+):
+    """Clear all DNS data (dns_queries, dns_targets)."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Clearing DNS data",
+        extra={"request_id": request_id, "action": "clear_dns"}
+    )
+    
+    try:
+        async with pool.acquire() as conn:
+            # Count rows before clearing
+            queries_count = await conn.fetchval("SELECT COUNT(*) FROM dns_queries")
+            targets_count = await conn.fetchval("SELECT COUNT(*) FROM dns_targets")
+            
+            # Clear DNS tables
+            await conn.execute("TRUNCATE TABLE dns_queries")
+            await conn.execute("TRUNCATE TABLE dns_targets")
+            
+            logger.info(
+                "DNS data cleared successfully",
+                extra={
+                    "request_id": request_id,
+                    "queries_cleared": queries_count,
+                    "targets_cleared": targets_count,
+                    "outcome": "success"
+                }
+            )
+            
+            return ok({
+                "success": True,
+                "message": f"Cleared {queries_count} DNS queries, {targets_count} DNS targets",
+                "stats": {
+                    "dns_queries": queries_count,
+                    "dns_targets": targets_count,
+                }
+            })
+    
+    except Exception as exc:
+        logger.error(
+            f"Failed to clear DNS data: {str(exc)}",
+            exc_info=True,
+            extra={"request_id": request_id, "outcome": "error"}
+        )
+        return err(str(exc))
+
+
+@router.post("/clear-graph")
+async def clear_graph(
+    driver = Depends(neo4j_dep),
+    request: Request = None,
+):
+    """Clear all Neo4j graph data (nodes and relationships)."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Clearing graph data",
+        extra={"request_id": request_id, "action": "clear_graph"}
+    )
+    
+    try:
+        async with driver.session() as session:
+            # Count nodes and relationships before clearing
+            count_result = await session.run(
+                "MATCH (n) OPTIONAL MATCH (n)-[r]-() RETURN count(DISTINCT n) as nodes, count(DISTINCT r) as rels"
+            )
+            count_record = await count_result.single()
+            nodes_count = count_record["nodes"] if count_record else 0
+            rels_count = count_record["rels"] if count_record else 0
+            
+            # Clear all nodes and relationships
+            await session.run("MATCH (n) DETACH DELETE n")
+            
+            logger.info(
+                "Graph data cleared successfully",
+                extra={
+                    "request_id": request_id,
+                    "nodes_cleared": nodes_count,
+                    "relationships_cleared": rels_count,
+                    "outcome": "success"
+                }
+            )
+            
+            return ok({
+                "success": True,
+                "message": f"Cleared {nodes_count} nodes, {rels_count} relationships",
+                "stats": {
+                    "nodes": nodes_count,
+                    "relationships": rels_count,
+                }
+            })
+    
+    except Exception as exc:
+        logger.error(
+            f"Failed to clear graph data: {str(exc)}",
+            exc_info=True,
+            extra={"request_id": request_id, "outcome": "error"}
+        )
+        return err(str(exc))
+
+
+@router.post("/clear-all")
+async def clear_all(
+    pool: asyncpg.Pool = Depends(pg_dep),
+    driver = Depends(neo4j_dep),
+    request: Request = None,
+):
+    """Clear all data: measurements, DNS data, and graph data."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Clearing all data",
+        extra={"request_id": request_id, "action": "clear_all"}
+    )
+    
+    total_stats = {}
+    
+    try:
+        # Clear PostgreSQL data
+        async with pool.acquire() as conn:
+            # Count rows before clearing
+            targets_count = await conn.fetchval("SELECT COUNT(*) FROM targets")
+            measurements_count = await conn.fetchval("SELECT COUNT(*) FROM measurements")
+            hops_count = await conn.fetchval("SELECT COUNT(*) FROM hops")
+            queries_count = await conn.fetchval("SELECT COUNT(*) FROM dns_queries")
+            dns_targets_count = await conn.fetchval("SELECT COUNT(*) FROM dns_targets")
+            
+            # Clear all tables
+            await conn.execute("TRUNCATE TABLE targets CASCADE")
+            await conn.execute("TRUNCATE TABLE dns_queries")
+            await conn.execute("TRUNCATE TABLE dns_targets")
+            
+            total_stats.update({
+                "targets": targets_count,
+                "measurements": measurements_count,
+                "hops": hops_count,
+                "dns_queries": queries_count,
+                "dns_targets": dns_targets_count,
+            })
+        
+        # Clear Neo4j data
+        async with driver.session() as session:
+            # Count nodes and relationships before clearing
+            count_result = await session.run(
+                "MATCH (n) OPTIONAL MATCH (n)-[r]-() RETURN count(DISTINCT n) as nodes, count(DISTINCT r) as rels"
+            )
+            count_record = await count_result.single()
+            nodes_count = count_record["nodes"] if count_record else 0
+            rels_count = count_record["rels"] if count_record else 0
+            
+            # Clear all nodes and relationships
+            await session.run("MATCH (n) DETACH DELETE n")
+            
+            total_stats.update({
+                "graph_nodes": nodes_count,
+                "graph_relationships": rels_count,
+            })
+        
+        logger.info(
+            "All data cleared successfully",
+            extra={
+                "request_id": request_id,
+                "stats": total_stats,
+                "outcome": "success"
+            }
+        )
+        
+        return ok({
+            "success": True,
+            "message": f"Cleared all data: {total_stats['targets']} targets, {total_stats['measurements']} measurements, {total_stats['hops']} hops, {total_stats['dns_queries']} DNS queries, {total_stats['dns_targets']} DNS targets, {total_stats['graph_nodes']} graph nodes, {total_stats['graph_relationships']} graph relationships",
+            "stats": total_stats
+        })
+    
+    except Exception as exc:
+        logger.error(
+            f"Failed to clear all data: {str(exc)}",
+            exc_info=True,
+            extra={"request_id": request_id, "outcome": "error"}
+        )
+        return err(str(exc))

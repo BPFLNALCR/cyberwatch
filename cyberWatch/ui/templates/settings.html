@@ -118,6 +118,58 @@
     <strong>Tip:</strong> Click "Reload Settings" after saving to apply changes without restarting the service manually.
   </div>
 </section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Data Management</p>
+      <h2 class="cw-h2">Clear Database</h2>
+    </div>
+    <div id="clear-status" class="cw-banner"></div>
+  </div>
+  
+  <p class="cw-body">
+    Remove data from the database. This action cannot be undone. Settings and configuration will be preserved.
+  </p>
+
+  <div class="cw-alert cw-alert-warning">
+    <strong>Warning:</strong> These actions are permanent and cannot be undone. Always confirm before proceeding.
+  </div>
+
+  <div class="cw-grid">
+    <div class="cw-tile">
+      <p class="cw-muted">Measurement Data</p>
+      <p class="cw-body small" style="margin: 0.5rem 0;">Traceroute targets, measurements, and hop data</p>
+      <button type="button" id="clear-measurements-btn" class="cw-btn-secondary" style="width: 100%;">
+        Clear Measurements
+      </button>
+    </div>
+    
+    <div class="cw-tile">
+      <p class="cw-muted">DNS Data</p>
+      <p class="cw-body small" style="margin: 0.5rem 0;">DNS queries and target domains</p>
+      <button type="button" id="clear-dns-btn" class="cw-btn-secondary" style="width: 100%;">
+        Clear DNS Data
+      </button>
+    </div>
+    
+    <div class="cw-tile">
+      <p class="cw-muted">Graph Data</p>
+      <p class="cw-body small" style="margin: 0.5rem 0;">AS-level topology nodes and relationships</p>
+      <button type="button" id="clear-graph-btn" class="cw-btn-secondary" style="width: 100%;">
+        Clear Graph
+      </button>
+    </div>
+    
+    <div class="cw-tile">
+      <p class="cw-muted">All Data</p>
+      <p class="cw-body small" style="margin: 0.5rem 0;">Complete database wipe (settings preserved)</p>
+      <button type="button" id="clear-all-btn" class="cw-btn-danger" style="width: 100%;">
+        Clear All Data
+      </button>
+    </div>
+  </div>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -140,6 +192,32 @@
     border-radius: 4px;
     font-family: "Consolas", "Monaco", monospace;
     font-size: 0.85rem;
+  }
+  .cw-btn-danger {
+    background: #ff4757;
+    color: white;
+    border: 1px solid #ee5a6f;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+  .cw-btn-danger:hover:not(:disabled) {
+    background: #ee5a6f;
+    transform: translateY(-1px);
+  }
+  .cw-btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .cw-alert-warning {
+    background: rgba(255, 193, 7, 0.1);
+    border-left: 3px solid #ffc107;
+    padding: 1rem;
+    margin: 1rem 0;
+    border-radius: 4px;
+    color: #c8d5ec;
   }
 </style>
 
@@ -375,5 +453,81 @@
   
   // Auto-refresh collector status every 10 seconds
   setInterval(checkCollectorStatus, 10000);
+
+  // Database clearing functionality
+  const clearStatus = document.getElementById("clear-status");
+  const clearMeasurementsBtn = document.getElementById("clear-measurements-btn");
+  const clearDnsBtn = document.getElementById("clear-dns-btn");
+  const clearGraphBtn = document.getElementById("clear-graph-btn");
+  const clearAllBtn = document.getElementById("clear-all-btn");
+
+  // Helper function to handle clear operations
+  async function handleClearOperation(endpoint, buttonElement, confirmMessage, successPrefix) {
+    if (!confirm(confirmMessage)) {
+      return;
+    }
+
+    const originalText = buttonElement.textContent;
+    buttonElement.disabled = true;
+    buttonElement.textContent = "Clearing...";
+    showMessage(clearStatus, "Processing...", "info");
+
+    try {
+      const result = await fetchJson(endpoint, {
+        method: "POST",
+      });
+
+      if (result.success) {
+        showMessage(clearStatus, result.message, "success");
+      } else {
+        showMessage(clearStatus, result.message || "Failed to clear data", "error");
+      }
+    } catch (err) {
+      showMessage(clearStatus, err.message || "Failed to clear data", "error");
+    } finally {
+      buttonElement.disabled = false;
+      buttonElement.textContent = originalText;
+    }
+  }
+
+  // Clear measurements
+  clearMeasurementsBtn.addEventListener("click", async () => {
+    await handleClearOperation(
+      "/settings/clear-measurements",
+      clearMeasurementsBtn,
+      "Are you sure you want to clear all measurement data?\n\nThis will delete:\n• All traceroute targets\n• All measurements\n• All hop data\n\nThis action cannot be undone.",
+      "Measurements cleared"
+    );
+  });
+
+  // Clear DNS data
+  clearDnsBtn.addEventListener("click", async () => {
+    await handleClearOperation(
+      "/settings/clear-dns",
+      clearDnsBtn,
+      "Are you sure you want to clear all DNS data?\n\nThis will delete:\n• All DNS queries\n• All DNS target records\n\nThis action cannot be undone.",
+      "DNS data cleared"
+    );
+  });
+
+  // Clear graph data
+  clearGraphBtn.addEventListener("click", async () => {
+    await handleClearOperation(
+      "/settings/clear-graph",
+      clearGraphBtn,
+      "Are you sure you want to clear all graph data?\n\nThis will delete:\n• All AS nodes\n• All relationships\n\nThis action cannot be undone.",
+      "Graph data cleared"
+    );
+  });
+
+  // Clear all data
+  clearAllBtn.addEventListener("click", async () => {
+    await handleClearOperation(
+      "/settings/clear-all",
+      clearAllBtn,
+      "⚠️ ARE YOU ABSOLUTELY SURE? ⚠️\n\nThis will PERMANENTLY DELETE:\n• All traceroute measurements\n• All DNS queries and targets\n• All graph topology data\n\nYour Pi-hole settings will be preserved.\n\nThis action CANNOT be undone!\n\nClick OK to proceed with complete database wipe.",
+      "All data cleared"
+    );
+  });
 </script>
 {% endblock %}
