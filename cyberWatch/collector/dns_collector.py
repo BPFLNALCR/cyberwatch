@@ -151,6 +151,14 @@ async def process_cycle(
     logger.info("Starting DNS collection cycle", extra={"action": "cycle_start"})
     
     queries_raw = await source.fetch_new()
+    if not queries_raw:
+        logger.warning(
+            "DNS source returned 0 queries",
+            extra={
+                "source": cfg.source,
+                "hint": "For Pi-hole v6, verify the configured password and check for parse warnings in logs",
+            },
+        )
     filtered = [q for q in queries_raw if not _ignore_query(cfg, q)]
     
     logger.info(
