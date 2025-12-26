@@ -254,26 +254,39 @@ configure_neo4j() {
   
   log "Configuring Neo4j"
   
-  # Stop Neo4j if running to reset configuration
+  # Stop Neo4j completely
+  log "Stopping Neo4j service"
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files >/dev/null 2>&1; then
-      sudo systemctl stop neo4j.service >/dev/null 2>&1 || true
-    fi
+    sudo systemctl stop neo4j.service >/dev/null 2>&1 || true
+    sleep 2
   fi
   
-  # Force clean slate: remove any existing auth files and databases
-  log "Resetting Neo4j for fresh configuration"
-  sudo rm -f /var/lib/neo4j/data/dbms/auth* 2>/dev/null || true
-  sudo rm -rf /var/lib/neo4j/data/databases/neo4j 2>/dev/null || true
-  sudo rm -rf /var/lib/neo4j/data/databases/system 2>/dev/null || true
+  # Force clean slate: remove ALL auth and database files
+  log "Clearing Neo4j data for fresh setup"
+  sudo rm -rf /var/lib/neo4j/data/dbms/auth* 2>/dev/null || true
+  sudo rm -rf /var/lib/neo4j/data/databases/* 2>/dev/null || true
   sudo rm -rf /var/lib/neo4j/data/transactions/* 2>/dev/null || true
   
-  # Enable and start Neo4j service
+  # Set initial password using neo4j-admin (MUST be done with service stopped)
+  log "Setting Neo4j initial password"
+  if ! command -v neo4j-admin >/dev/null 2>&1; then
+    warn "neo4j-admin not found. Neo4j may not be installed correctly."
+    return 1
+  fi
+  
+  # Run as neo4j user to avoid permission issues
+  if ! sudo -u neo4j neo4j-admin dbms set-initial-password "${neo4j_password}" 2>&1; then
+    warn "Failed to set Neo4j password with neo4j-admin"
+    warn "This usually means Neo4j is not installed or permissions are wrong"
+    return 1
+  fi
+  
+  log "Neo4j password set, starting service"
+  
+  # Start and enable Neo4j
   if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files >/dev/null 2>&1; then
-      sudo systemctl enable neo4j.service >/dev/null 2>&1 || true
-      sudo systemctl start neo4j.service || true
-    fi
+    sudo systemctl enable neo4j.service >/dev/null 2>&1 || true
+    sudo systemctl start neo4j.service || true
   fi
   
   # Wait for Neo4j to be ready
@@ -289,73 +302,28 @@ configure_neo4j() {
   done
   
   if (( tries == 0 )); then
-    warn "Neo4j did not become ready in time. You may need to configure it manually."
-    warn "Run: cypher-shell -u neo4j -p neo4j"
-    warn "Then: ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO 'your_password'"
+    warn "Neo4j did not start in time"
     return 1
   fi
   
-  # Set Neo4j password (we have a clean slate with default password)
-  log "Setting Neo4j password"
-  
-  # Since we cleared auth files, Neo4j starts with default password 'neo4j'
-  # Change it using ALTER USER command (pipe to avoid interactive prompts)
+  # Verify authentication works
+  log "Verifying Neo4j authentication"
   if command -v cypher-shell >/dev/null 2>&1; then
-    if echo "ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO '${neo4j_password}';" | cypher-shell -u neo4j -p neo4j --non-interactive >/dev/null 2>&1; then
-      log "Neo4j password set successfully"
-    else
-      warn "Failed to set Neo4j password"
-      warn "Trying neo4j-admin method..."
-      
-      # Fallback to neo4j-admin
-      if command -v neo4j-admin >/dev/null 2>&1; then
-        sudo systemctl stop neo4j.service >/dev/null 2>&1 || true
-        sleep 1
-        sudo rm -f /var/lib/neo4j/data/dbms/auth* 2>/dev/null || true
-        
-        if sudo -u neo4j neo4j-admin dbms set-initial-password "${neo4j_password}" >/dev/null 2>&1; then
-          log "Password set with neo4j-admin"
-        else
-          warn "Could not set password. Manual configuration required."
-          warn "Run: sudo systemctl stop neo4j && sudo rm -f /var/lib/neo4j/data/dbms/auth*"
-          warn "Then: sudo neo4j-admin dbms set-initial-password 'yourpassword'"
-          warn "Finally: sudo systemctl start neo4j"
-        fi
-        
-        sudo systemctl start neo4j.service >/dev/null 2>&1 || true
-        sleep 3
-      else
-        warn "neo4j-admin not found. Install Neo4j properly."
-      fi
-    fi
-    
-    # Verify password works
-    if echo "RETURN 1;" | cypher-shell -u neo4j -p "${neo4j_password}" --non-interactive >/dev/null 2>&1; then
+    if printf "RETURN 1 AS test;\n" | cypher-shell -u neo4j -p "${neo4j_password}" >/dev/null 2>&1; then
       log "Neo4j authentication verified"
     else
-      warn "Neo4j password verification failed. Check $ENV_FILE_DEST for stored password."
+      warn "Neo4j authentication failed after setup"
+      return 1
     fi
-  else
-    warn "cypher-shell not found. Cannot set Neo4j password."
   fi
   
-  # Apply schema constraints/indexes
+  # Create constraints and indexes
+  log "Creating Neo4j schema"
   if command -v cypher-shell >/dev/null 2>&1; then
-    log "Creating Neo4j constraints and indexes"
-    if ! cypher-shell -u neo4j -p "${neo4j_password}" 2>/dev/null <<'CYPHER'
-CREATE CONSTRAINT asn_unique IF NOT EXISTS FOR (a:AS) REQUIRE a.asn IS UNIQUE;
-CREATE INDEX asn_org_name IF NOT EXISTS FOR (a:AS) ON (a.org_name);
-CREATE INDEX asn_country IF NOT EXISTS FOR (a:AS) ON (a.country);
-CYPHER
-    then
-      warn "Failed to create constraints/indexes. Verify Neo4j password is correct."
-      warn "Password stored in $ENV_FILE_DEST"
-      warn "Test manually: cypher-shell -u neo4j -p <password>"
-    else
-      log "Neo4j constraints and indexes created successfully"
-    fi
-  else
-    warn "cypher-shell not found. Constraints/indexes can be created via Neo4j Browser."
+    printf "CREATE CONSTRAINT asn_unique IF NOT EXISTS FOR (a:AS) REQUIRE a.asn IS UNIQUE;\nCREATE INDEX asn_org_name IF NOT EXISTS FOR (a:AS) ON (a.org_name);\nCREATE INDEX asn_country IF NOT EXISTS FOR (a:AS) ON (a.country);\n" | \
+      cypher-shell -u neo4j -p "${neo4j_password}" >/dev/null 2>&1 && \
+      log "Neo4j schema created" || \
+      warn "Failed to create Neo4j schema (can be done manually later)"
   fi
   
   log "Neo4j configuration complete"
