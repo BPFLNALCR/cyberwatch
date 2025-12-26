@@ -9,9 +9,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 
 class PiholeConfig(BaseModel):
-    base_url: str = Field(default="http://pihole.local/admin/api.php")
+    base_url: str = Field(default="http://pihole.local")
     api_token: str = Field(default="REPLACE_ME")
     poll_interval_seconds: int = Field(default=30, ge=5)
+    verify_ssl: bool = Field(default=True)
 
 
 class LogFileConfig(BaseModel):

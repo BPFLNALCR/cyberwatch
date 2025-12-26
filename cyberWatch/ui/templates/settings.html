@@ -60,6 +60,14 @@
       </label>
     </div>
 
+    <div class="cw-input-row" style="margin-top: 0.5rem;">
+      <label class="cw-checkbox-label">
+        <input type="checkbox" id="pihole-verify-ssl" name="verify_ssl" checked>
+        <span>Verify SSL certificate</span>
+      </label>
+      <span class="cw-muted small" style="align-self: center; margin-left: 0.5rem;">Disable for self-signed certificates</span>
+    </div>
+
     <div class="cw-input-row" style="margin-top: 1rem;">
       <button type="button" id="test-btn" class="cw-btn-secondary">Test Connection</button>
       <button type="submit" id="save-btn">Save Settings</button>
@@ -135,6 +143,7 @@
   const piholeToken = document.getElementById("pihole-token");
   const piholeInterval = document.getElementById("pihole-interval");
   const piholeEnabled = document.getElementById("pihole-enabled");
+  const piholeVerifySsl = document.getElementById("pihole-verify-ssl");
   const testBtn = document.getElementById("test-btn");
   const saveBtn = document.getElementById("save-btn");
   const toggleBtn = document.getElementById("toggle-token");
@@ -164,6 +173,7 @@
         piholeUrl.value = data.base_url || "";
         piholeInterval.value = data.poll_interval_seconds || 30;
         piholeEnabled.checked = data.enabled;
+        piholeVerifySsl.checked = data.verify_ssl !== false;
         if (data.has_token) {
           piholeToken.placeholder = "••••••••••••• (saved)";
         }
@@ -197,6 +207,7 @@
         api_token: piholeToken.value || "USE_SAVED_TOKEN",
         enabled: piholeEnabled.checked,
         poll_interval_seconds: parseInt(piholeInterval.value) || 30,
+        verify_ssl: piholeVerifySsl.checked,
       };
 
       const data = await fetchJson("/settings/pihole/test", {
@@ -253,6 +264,7 @@
         api_token: piholeToken.value,
         enabled: piholeEnabled.checked,
         poll_interval_seconds: parseInt(piholeInterval.value) || 30,
+        verify_ssl: piholeVerifySsl.checked,
       };
 
       // If no new token provided but one is saved, we need to handle this

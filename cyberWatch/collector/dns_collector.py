@@ -245,6 +245,7 @@ async def run_collector(config_path: str) -> None:
             base_url=db_settings.get("base_url", ""),
             api_token=db_settings.get("api_token", ""),
             poll_interval_seconds=db_settings.get("poll_interval_seconds", 30),
+            verify_ssl=db_settings.get("verify_ssl", True),
         )
     else:
         logger.info(

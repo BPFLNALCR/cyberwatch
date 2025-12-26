@@ -92,6 +92,7 @@ async def save_pihole_settings(
     api_token: str,
     enabled: bool = True,
     poll_interval_seconds: int = 30,
+    verify_ssl: bool = True,
 ) -> None:
     """Save Pi-hole connection settings."""
     await set_setting(pool, PIHOLE_SETTINGS_KEY, {
@@ -99,4 +100,5 @@ async def save_pihole_settings(
         "api_token": api_token,
         "enabled": enabled,
         "poll_interval_seconds": poll_interval_seconds,
+        "verify_ssl": verify_ssl,
     })

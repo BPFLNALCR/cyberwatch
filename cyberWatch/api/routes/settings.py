@@ -23,6 +23,7 @@ class PiholeSettingsRequest(BaseModel):
     api_token: str = Field(..., description="Pi-hole API password/token")
     enabled: bool = Field(default=True, description="Enable DNS collection from Pi-hole")
     poll_interval_seconds: int = Field(default=30, ge=5, le=300, description="Poll interval in seconds")
+    verify_ssl: bool = Field(default=True, description="Verify SSL certificates (disable for self-signed certs)")
 
 
 class PiholeSettingsResponse(BaseModel):
@@ -55,6 +56,7 @@ async def get_pihole(
             "enabled": False,
             "poll_interval_seconds": 30,
             "has_token": False,
+            "verify_ssl": True,
         })
     
     return ok({
@@ -63,6 +65,7 @@ async def get_pihole(
         "enabled": settings.get("enabled", False),
         "poll_interval_seconds": settings.get("poll_interval_seconds", 30),
         "has_token": bool(settings.get("api_token")),
+        "verify_ssl": settings.get("verify_ssl", True),
     })
 
 
@@ -92,6 +95,7 @@ async def save_pihole(
         api_token=body.api_token,
         enabled=body.enabled,
         poll_interval_seconds=body.poll_interval_seconds,
+        verify_ssl=body.verify_ssl,
     )
     
     logger.info(
@@ -122,7 +126,16 @@ async def test_pihole_connection(
     # First, authenticate to get a session
     try:
         timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        
+        # Create SSL context for self-signed certs if verify_ssl is False
+        import ssl
+        ssl_context = None if body.verify_ssl else ssl.create_default_context()
+        if not body.verify_ssl:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             # Try v6 authentication first
             auth_url = f"{base_url}/api/auth"
             auth_payload = {"password": body.api_token}

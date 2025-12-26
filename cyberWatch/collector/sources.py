@@ -51,7 +51,18 @@ class PiholeApiSource:
     async def _client(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             timeout = aiohttp.ClientTimeout(total=15)
-            self.session = aiohttp.ClientSession(timeout=timeout)
+            
+            # Handle SSL verification for self-signed certificates
+            import ssl
+            ssl_context = None
+            if not self.cfg.verify_ssl:
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+                logger.debug("SSL verification disabled for Pi-hole connection")
+            
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return self.session
 
     async def _detect_api_version(self) -> str:
