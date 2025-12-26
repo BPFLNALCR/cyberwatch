@@ -1,11 +1,22 @@
+# CyberWatch DNS Collector Configuration
+#
+# NOTE: Pi-hole settings can also be configured via the Web UI at /settings
+# Database-stored settings (from the UI) take precedence over this file.
+#
+# To configure via UI: Navigate to http://your-server:8080/settings
+
 enabled: true
 source: "pihole"  # or "logfile"
 
+# Pi-hole Configuration (v5 and v6 supported)
+# For Pi-hole v6: Use your web interface password as the API token
+# For Pi-hole v5: Find token in Settings → API → Show API token
 pihole:
-  base_url: "http://pihole.local/admin/api.php"
+  base_url: "http://pihole.local"  # Just the base URL, no /admin/api.php needed
   api_token: "REPLACE_ME"
   poll_interval_seconds: 30
 
+# Alternative: Tail Pi-hole log file directly
 logfile:
   log_path: "/var/log/pihole.log"
   format: "pihole_ftl"

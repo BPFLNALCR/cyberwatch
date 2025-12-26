@@ -10,8 +10,9 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from cyberWatch.api.routes import measurements, traceroute, targets, asn, graph, dns, health
+from cyberWatch.api.routes import measurements, traceroute, targets, asn, graph, dns, health, settings
 from cyberWatch.api.utils import db
+from cyberWatch.db.settings import ensure_settings_table
 from cyberWatch.logging_config import setup_logging
 
 logger = setup_logging("api")
@@ -108,12 +109,17 @@ app.include_router(asn.router)
 app.include_router(graph.router)
 app.include_router(dns.router)
 app.include_router(health.router)
+app.include_router(settings.router)
 
 
 @app.on_event("startup")
 async def startup_event() -> None:
     logger.info("Starting cyberWatch API", extra={"component": "api", "state": "startup"})
     await db.init_resources()
+    # Ensure settings table exists
+    pool = db.get_pg_pool()
+    if pool:
+        await ensure_settings_table(pool)
     logger.info("API startup complete", extra={"component": "api", "state": "ready"})
 
 

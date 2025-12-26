@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Configuration</p>
+      <h2 class="cw-h2">Settings</h2>
+    </div>
+    <div id="page-status" class="cw-banner"></div>
+  </div>
+  <p class="cw-body">Configure data sources and system settings for CyberWatch.</p>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">DNS Data Source</p>
+      <h2 class="cw-h2">Pi-hole Integration</h2>
+    </div>
+    <div id="pihole-status" class="cw-banner"></div>
+  </div>
+  
+  <p class="cw-body">
+    Connect to your Pi-hole to use DNS queries as measurement targets. 
+    CyberWatch will automatically trace routes to domains you visit.
+  </p>
+
+  <div class="cw-alert cw-alert-info">
+    <strong>Pi-hole v6:</strong> Use your web interface password as the API token.<br>
+    <strong>Pi-hole v5:</strong> Find your API token in Settings → API → Show API token.
+  </div>
+
+  <form id="pihole-form" class="cw-form">
+    <label for="pihole-url">Pi-hole URL</label>
+    <div class="cw-input-row">
+      <input type="url" id="pihole-url" name="base_url" 
+             placeholder="http://192.168.1.10 or http://pi.hole" 
+             required>
+    </div>
+
+    <label for="pihole-token">API Token / Password</label>
+    <div class="cw-input-row">
+      <input type="password" id="pihole-token" name="api_token" 
+             placeholder="Your Pi-hole password or API token" 
+             required>
+      <button type="button" id="toggle-token" class="cw-btn-small">Show</button>
+    </div>
+
+    <label for="pihole-interval">Poll Interval (seconds)</label>
+    <div class="cw-input-row">
+      <input type="number" id="pihole-interval" name="poll_interval_seconds" 
+             value="30" min="5" max="300" style="max-width: 120px;">
+      <span class="cw-muted" style="align-self: center;">How often to fetch new DNS queries</span>
+    </div>
+
+    <div class="cw-input-row" style="margin-top: 0.5rem;">
+      <label class="cw-checkbox-label">
+        <input type="checkbox" id="pihole-enabled" name="enabled" checked>
+        <span>Enable DNS collection from Pi-hole</span>
+      </label>
+    </div>
+
+    <div class="cw-input-row" style="margin-top: 1rem;">
+      <button type="button" id="test-btn" class="cw-btn-secondary">Test Connection</button>
+      <button type="submit" id="save-btn">Save Settings</button>
+    </div>
+  </form>
+
+  <div id="test-result" class="cw-result" style="display: none;">
+    <div class="cw-tile">
+      <p class="cw-muted">Connection Test Result</p>
+      <div id="test-result-content"></div>
+    </div>
+  </div>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Service Status</p>
+      <h2 class="cw-h2">DNS Collector</h2>
+    </div>
+  </div>
+  
+  <p class="cw-body">
+    The DNS collector service fetches queries from Pi-hole and enqueues them for measurement.
+  </p>
+
+  <div class="cw-grid">
+    <div class="cw-tile">
+      <p class="cw-muted">Collector Status</p>
+      <div id="collector-status" class="cw-tile-value">—</div>
+      <p id="collector-hint" class="cw-muted small"></p>
+    </div>
+    <div class="cw-tile">
+      <p class="cw-muted">Configuration Source</p>
+      <div class="cw-tile-value">Database</div>
+      <p class="cw-muted small">Settings saved via this page</p>
+    </div>
+  </div>
+
+  <div class="cw-alert cw-alert-warning" style="margin-top: 1rem;">
+    <strong>Note:</strong> After saving settings, restart the DNS collector service for changes to take effect:<br>
+    <code>sudo systemctl restart cyberWatch-dns-collector</code>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .cw-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    color: #c8d5ec;
+  }
+  .cw-checkbox-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #7cf3ff;
+  }
+  code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 0.85rem;
+  }
+</style>
+
+<script>
+  const piholeForm = document.getElementById("pihole-form");
+  const piholeUrl = document.getElementById("pihole-url");
+  const piholeToken = document.getElementById("pihole-token");
+  const piholeInterval = document.getElementById("pihole-interval");
+  const piholeEnabled = document.getElementById("pihole-enabled");
+  const testBtn = document.getElementById("test-btn");
+  const saveBtn = document.getElementById("save-btn");
+  const toggleBtn = document.getElementById("toggle-token");
+  const piholeStatus = document.getElementById("pihole-status");
+  const testResult = document.getElementById("test-result");
+  const testResultContent = document.getElementById("test-result-content");
+  const collectorStatus = document.getElementById("collector-status");
+  const collectorHint = document.getElementById("collector-hint");
+
+  // Toggle password visibility
+  toggleBtn.addEventListener("click", () => {
+    if (piholeToken.type === "password") {
+      piholeToken.type = "text";
+      toggleBtn.textContent = "Hide";
+    } else {
+      piholeToken.type = "password";
+      toggleBtn.textContent = "Show";
+    }
+  });
+
+  // Load existing settings
+  async function loadSettings() {
+    showMessage(piholeStatus, "Loading...", "info");
+    try {
+      const data = await fetchJson("/settings/pihole");
+      if (data.configured) {
+        piholeUrl.value = data.base_url || "";
+        piholeInterval.value = data.poll_interval_seconds || 30;
+        piholeEnabled.checked = data.enabled;
+        if (data.has_token) {
+          piholeToken.placeholder = "••••••••••••• (saved)";
+        }
+        showMessage(piholeStatus, "Settings loaded", "success");
+      } else {
+        showMessage(piholeStatus, "Not configured", "info");
+      }
+    } catch (err) {
+      showMessage(piholeStatus, err.message || "Failed to load settings", "error");
+    }
+  }
+
+  // Test connection
+  testBtn.addEventListener("click", async () => {
+    if (!piholeUrl.value) {
+      showMessage(piholeStatus, "Please enter a Pi-hole URL", "error");
+      return;
+    }
+    if (!piholeToken.value && !piholeToken.placeholder.includes("saved")) {
+      showMessage(piholeStatus, "Please enter an API token", "error");
+      return;
+    }
+
+    testBtn.disabled = true;
+    testBtn.textContent = "Testing...";
+    testResult.style.display = "none";
+
+    try {
+      const payload = {
+        base_url: piholeUrl.value,
+        api_token: piholeToken.value || "USE_SAVED_TOKEN",
+        enabled: piholeEnabled.checked,
+        poll_interval_seconds: parseInt(piholeInterval.value) || 30,
+      };
+
+      const data = await fetchJson("/settings/pihole/test", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      testResult.style.display = "block";
+      
+      if (data.success) {
+        testResultContent.innerHTML = `
+          <div class="cw-pill cw-pill-ok" style="margin-bottom: 0.5rem;">Success</div>
+          <p style="margin: 0.25rem 0;">${data.message}</p>
+          <p class="cw-muted small">API Version: ${data.api_version}</p>
+        `;
+      } else {
+        testResultContent.innerHTML = `
+          <div class="cw-pill cw-pill-bad" style="margin-bottom: 0.5rem;">Failed</div>
+          <p style="margin: 0.25rem 0;">${data.message}</p>
+        `;
+      }
+    } catch (err) {
+      testResult.style.display = "block";
+      testResultContent.innerHTML = `
+        <div class="cw-pill cw-pill-bad" style="margin-bottom: 0.5rem;">Error</div>
+        <p style="margin: 0.25rem 0;">${err.message || "Connection test failed"}</p>
+      `;
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = "Test Connection";
+    }
+  });
+
+  // Save settings
+  piholeForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    if (!piholeUrl.value) {
+      showMessage(piholeStatus, "Please enter a Pi-hole URL", "error");
+      return;
+    }
+    if (!piholeToken.value && !piholeToken.placeholder.includes("saved")) {
+      showMessage(piholeStatus, "Please enter an API token", "error");
+      return;
+    }
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving...";
+    showMessage(piholeStatus, "Saving...", "info");
+
+    try {
+      const payload = {
+        base_url: piholeUrl.value,
+        api_token: piholeToken.value,
+        enabled: piholeEnabled.checked,
+        poll_interval_seconds: parseInt(piholeInterval.value) || 30,
+      };
+
+      // If no new token provided but one is saved, we need to handle this
+      // For now, require token on save (user can re-enter it)
+      if (!payload.api_token) {
+        showMessage(piholeStatus, "Please re-enter your API token to save", "error");
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Settings";
+        return;
+      }
+
+      await fetchJson("/settings/pihole", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      showMessage(piholeStatus, "Settings saved! Restart collector service.", "success");
+      piholeToken.value = "";
+      piholeToken.placeholder = "••••••••••••• (saved)";
+    } catch (err) {
+      showMessage(piholeStatus, err.message || "Failed to save settings", "error");
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save Settings";
+    }
+  });
+
+  // Check collector status
+  async function checkCollectorStatus() {
+    try {
+      const settings = await fetchJson("/settings/pihole");
+      if (settings.configured && settings.enabled) {
+        collectorStatus.textContent = "Configured";
+        collectorStatus.className = "cw-pill cw-pill-ok";
+        collectorHint.textContent = "Settings are saved. Collector should be running.";
+      } else if (settings.configured && !settings.enabled) {
+        collectorStatus.textContent = "Disabled";
+        collectorStatus.className = "cw-pill cw-pill-bad";
+        collectorHint.textContent = "Enable collection to start gathering DNS data.";
+      } else {
+        collectorStatus.textContent = "Not Configured";
+        collectorStatus.className = "cw-pill cw-pill-bad";
+        collectorHint.textContent = "Enter Pi-hole settings above to configure.";
+      }
+    } catch (err) {
+      collectorStatus.textContent = "Unknown";
+      collectorStatus.className = "";
+      collectorHint.textContent = "Could not check status.";
+    }
+  }
+
+  // Initialize
+  loadSettings();
+  checkCollectorStatus();
+</script>
+{% endblock %}

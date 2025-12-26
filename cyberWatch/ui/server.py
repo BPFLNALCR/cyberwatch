@@ -72,6 +72,16 @@ async def graph_page(request: Request):
     return templates.TemplateResponse("graph.html", _ctx(request))
 
 
+@app.get("/dns", response_class=HTMLResponse)
+async def dns_page(request: Request):
+    return templates.TemplateResponse("dns.html", _ctx(request))
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    return templates.TemplateResponse("settings.html", _ctx(request))
+
+
 if __name__ == "__main__":
     import uvicorn
 

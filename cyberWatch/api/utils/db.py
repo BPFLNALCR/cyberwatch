@@ -76,3 +76,8 @@ async def neo4j_dep() -> AsyncDriver:
     if _driver is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Neo4j unavailable")
     return _driver
+
+
+def get_pg_pool() -> Optional[asyncpg.Pool]:
+    """Return the current PostgreSQL pool, or None if not initialized."""
+    return _pool

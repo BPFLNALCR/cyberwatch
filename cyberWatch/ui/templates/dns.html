@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">DNS Intelligence</p>
+      <h2 class="cw-h2">DNS Activity</h2>
+    </div>
+    <div id="page-status" class="cw-banner"></div>
+  </div>
+  <p class="cw-body">
+    DNS queries from your Pi-hole drive automatic traceroute measurements. 
+    View top domains and their associated ASNs.
+  </p>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Most Active</p>
+      <h2 class="cw-h2">Top Domains</h2>
+    </div>
+    <button id="refresh-btn" class="cw-btn-small">Refresh</button>
+  </div>
+
+  <div id="domains-loading" class="cw-banner cw-info">Loading top domains...</div>
+  <div id="domains-list" class="cw-history-list" style="display: none;"></div>
+  <div id="domains-empty" class="cw-alert cw-alert-info" style="display: none;">
+    No DNS data yet. Configure Pi-hole in <a href="/settings" style="color: #7cf3ff;">Settings</a> to start collecting DNS queries.
+  </div>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Network Distribution</p>
+      <h2 class="cw-h2">Top ASNs by DNS Queries</h2>
+    </div>
+  </div>
+
+  <div id="asns-loading" class="cw-banner cw-info">Loading ASN data...</div>
+  <div id="asns-grid" class="cw-grid" style="display: none;"></div>
+  <div id="asns-empty" class="cw-alert cw-alert-info" style="display: none;">
+    No ASN data available yet. Data will appear after DNS targets are resolved and enriched.
+  </div>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
+      <p class="cw-eyebrow">Quick Stats</p>
+      <h2 class="cw-h2">Collection Summary</h2>
+    </div>
+  </div>
+
+  <div class="cw-analytics-grid">
+    <div class="cw-stat-card">
+      <div class="cw-stat-label">Total Domains</div>
+      <div id="stat-domains" class="cw-stat-value">—</div>
+    </div>
+    <div class="cw-stat-card">
+      <div class="cw-stat-label">Total Queries</div>
+      <div id="stat-queries" class="cw-stat-value">—</div>
+    </div>
+    <div class="cw-stat-card">
+      <div class="cw-stat-label">Unique ASNs</div>
+      <div id="stat-asns" class="cw-stat-value">—</div>
+    </div>
+    <div class="cw-stat-card">
+      <div class="cw-stat-label">Last Update</div>
+      <div id="stat-updated" class="cw-stat-value">—</div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const domainsLoading = document.getElementById("domains-loading");
+  const domainsList = document.getElementById("domains-list");
+  const domainsEmpty = document.getElementById("domains-empty");
+  const asnsLoading = document.getElementById("asns-loading");
+  const asnsGrid = document.getElementById("asns-grid");
+  const asnsEmpty = document.getElementById("asns-empty");
+  const refreshBtn = document.getElementById("refresh-btn");
+
+  async function loadTopDomains() {
+    domainsLoading.style.display = "block";
+    domainsList.style.display = "none";
+    domainsEmpty.style.display = "none";
+
+    try {
+      const data = await fetchJson("/dns/top-domains?limit=20");
+      
+      if (!data || data.length === 0) {
+        domainsLoading.style.display = "none";
+        domainsEmpty.style.display = "block";
+        document.getElementById("stat-domains").textContent = "0";
+        document.getElementById("stat-queries").textContent = "0";
+        return;
+      }
+
+      let totalQueries = 0;
+      domainsList.innerHTML = data.map(d => {
+        totalQueries += d.total_queries || 0;
+        const lastSeen = d.last_seen ? new Date(d.last_seen).toLocaleString() : "—";
+        return `
+          <div class="cw-history-row" onclick="window.location='/traceroute?target=${encodeURIComponent(d.domain)}'">
+            <div class="cw-history-main">
+              <span class="cw-history-target">${escapeHtml(d.domain)}</span>
+              <span class="cw-chip cw-chip-small">${d.unique_ips || 0} IPs</span>
+            </div>
+            <div class="cw-history-meta">
+              <span class="cw-muted">${d.total_queries || 0} queries</span>
+              <span class="cw-muted small">Last: ${lastSeen}</span>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      domainsLoading.style.display = "none";
+      domainsList.style.display = "grid";
+      
+      document.getElementById("stat-domains").textContent = data.length;
+      document.getElementById("stat-queries").textContent = totalQueries.toLocaleString();
+      document.getElementById("stat-updated").textContent = new Date().toLocaleTimeString();
+    } catch (err) {
+      domainsLoading.textContent = "Failed to load domains: " + err.message;
+      domainsLoading.className = "cw-banner cw-error";
+    }
+  }
+
+  async function loadTopAsns() {
+    asnsLoading.style.display = "block";
+    asnsGrid.style.display = "none";
+    asnsEmpty.style.display = "none";
+
+    try {
+      const data = await fetchJson("/dns/top-asns?limit=12");
+      
+      if (!data || data.length === 0) {
+        asnsLoading.style.display = "none";
+        asnsEmpty.style.display = "block";
+        document.getElementById("stat-asns").textContent = "0";
+        return;
+      }
+
+      asnsGrid.innerHTML = data.map(a => `
+        <div class="cw-tile" style="cursor: pointer;" onclick="window.location='/asn?asn=${a.asn}'">
+          <p class="cw-muted">AS${a.asn}</p>
+          <div class="cw-tile-value" style="font-size: 1rem;">${escapeHtml(a.org || 'Unknown')}</div>
+          <p class="cw-muted small">${a.total_queries?.toLocaleString() || 0} queries</p>
+        </div>
+      `).join("");
+
+      asnsLoading.style.display = "none";
+      asnsGrid.style.display = "grid";
+      
+      document.getElementById("stat-asns").textContent = data.length;
+    } catch (err) {
+      asnsLoading.textContent = "Failed to load ASNs: " + err.message;
+      asnsLoading.className = "cw-banner cw-error";
+    }
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  async function loadAll() {
+    await Promise.all([loadTopDomains(), loadTopAsns()]);
+  }
+
+  refreshBtn.addEventListener("click", loadAll);
+
+  // Initial load
+  loadAll();
+
+  // Auto-refresh every 60 seconds
+  setInterval(loadAll, 60000);
+</script>
+{% endblock %}

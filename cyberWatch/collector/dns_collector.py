@@ -5,13 +5,13 @@ import argparse
 import asyncio
 import os
 from datetime import datetime
-from typing import List, Sequence, cast
+from typing import Any, Dict, List, Optional, Sequence, cast
 
 import dns.asyncresolver
 from rich.console import Console
 from rich.traceback import install as install_rich_traceback
 
-from cyberWatch.collector.config import DNSCollectorConfig
+from cyberWatch.collector.config import DNSCollectorConfig, PiholeConfig
 from cyberWatch.collector.models import DNSQuery, ResolvedTarget
 from cyberWatch.collector.sources import DNSSource, build_source
 from cyberWatch.db.pg import create_pool
@@ -22,6 +22,7 @@ from cyberWatch.db.pg_dns import (
     touch_target,
     upsert_dns_targets,
 )
+from cyberWatch.db.settings import get_pihole_settings, ensure_settings_table
 from cyberWatch.scheduler.queue import TargetQueue, TargetTask
 from cyberWatch.logging_config import get_logger
 
@@ -222,13 +223,42 @@ async def process_cycle(
 
 async def run_collector(config_path: str) -> None:
     cfg = DNSCollectorConfig.load(config_path)
+    
+    # Connect to database to check for UI-configured settings
+    pool = await create_pool(os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch"))
+    
+    # Ensure settings table exists
+    await ensure_settings_table(pool)
+    
+    # Check for database-stored Pi-hole settings (from UI)
+    db_settings = await get_pihole_settings(pool)
+    
+    if db_settings and db_settings.get("base_url"):
+        logger.info(
+            "Loading Pi-hole settings from database",
+            extra={"source": "database", "base_url": db_settings.get("base_url")}
+        )
+        # Override config with database settings
+        cfg.enabled = db_settings.get("enabled", True)
+        cfg.source = "pihole"
+        cfg.pihole = PiholeConfig(
+            base_url=db_settings.get("base_url", ""),
+            api_token=db_settings.get("api_token", ""),
+            poll_interval_seconds=db_settings.get("poll_interval_seconds", 30),
+        )
+    else:
+        logger.info(
+            "Using Pi-hole settings from config file",
+            extra={"source": "config_file", "config_path": config_path}
+        )
+    
     if not cfg.enabled:
         logger.warning("DNS collector disabled in config; exiting")
         console.print("[yellow]DNS collector disabled in config; exiting.")
+        await pool.close()
         return
 
     source = await build_source(cfg.source, cfg.pihole, cfg.logfile)
-    pool = await create_pool(os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch"))
     queue = TargetQueue()
 
     logger.info(
@@ -237,7 +267,7 @@ async def run_collector(config_path: str) -> None:
             "component": "collector",
             "state": "starting",
             "poll_interval": cfg.poll_interval,
-            "source_type": cfg.source.type,
+            "source_type": cfg.source,
         }
     )
     console.print("[green]Starting cyberWatch DNS collector", highlight=False)
@@ -245,6 +275,15 @@ async def run_collector(config_path: str) -> None:
     try:
         while True:
             try:
+                # Re-check database settings each cycle to pick up changes
+                db_settings = await get_pihole_settings(pool)
+                if db_settings:
+                    cfg.enabled = db_settings.get("enabled", True)
+                    if not cfg.enabled:
+                        logger.info("DNS collector disabled via settings, pausing")
+                        await asyncio.sleep(cfg.poll_interval)
+                        continue
+                
                 stats = await process_cycle(cfg, source, pool, queue)
                 console.log(
                     f"queries={stats['raw']} filtered={stats['filtered']} resolved={stats['resolved']} enqueued={stats['enqueued']}"
