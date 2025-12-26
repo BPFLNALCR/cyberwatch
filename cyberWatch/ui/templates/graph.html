@@ -1,79 +1,137 @@
 {% extends "base.html" %}
+
 {% block content %}
-<section class="cw-card">
-  <div class="cw-card-header">
-    <div>
-      <p class="cw-eyebrow">Network topology</p>
-      <h2 class="cw-h2">Graph Neighbors</h2>
+</main>
+<!-- Close the default cw-page main container and create our own full-viewport layout -->
+
+<div class="cw-graph-container">
+  <!-- Sidebar with controls and filters -->
+  <aside class="cw-graph-sidebar">
+    <div class="cw-card">
+      <div class="cw-card-header">
+        <p class="cw-eyebrow">Network topology</p>
+        <h2 class="cw-h2">ASN Explorer</h2>
+      </div>
+      
+      <div id="graph-status" class="cw-banner"></div>
+      
+      <!-- View mode toggle -->
+      <div class="cw-control-group">
+        <label class="cw-label">View Mode</label>
+        <div class="cw-button-group">
+          <button id="btn-top-asns" class="cw-btn-toggle active">Top ASNs</button>
+          <button id="btn-explore-asn" class="cw-btn-toggle">Explore ASN</button>
+        </div>
+      </div>
+      
+      <!-- Explore ASN form (hidden by default) -->
+      <form id="explore-form" class="cw-form" style="display: none;">
+        <label for="explore-asn">Starting ASN</label>
+        <input type="number" id="explore-asn" name="asn" placeholder="13335" min="1">
+        
+        <label for="depth">Exploration Depth</label>
+        <select id="depth" name="depth">
+          <option value="1">1 hop</option>
+          <option value="2">2 hops</option>
+          <option value="3">3 hops</option>
+        </select>
+        
+        <button type="submit" class="cw-btn-primary">Explore</button>
+      </form>
+      
+      <!-- Filters -->
+      <div class="cw-control-group">
+        <label class="cw-label">Sort By</label>
+        <select id="sort-by" class="cw-select">
+          <option value="traffic">Traffic Volume</option>
+          <option value="neighbors">Neighbor Count</option>
+          <option value="rtt">Avg RTT</option>
+          <option value="country">Country</option>
+        </select>
+      </div>
+      
+      <div class="cw-control-group">
+        <label class="cw-label">Filter by Country</label>
+        <input type="text" id="country-filter" class="cw-input" placeholder="US, DE, etc." maxlength="2">
+      </div>
+      
+      <div class="cw-control-group">
+        <label class="cw-label">Max ASNs</label>
+        <input type="number" id="limit" class="cw-input" value="20" min="5" max="100">
+      </div>
+      
+      <button id="btn-apply-filters" class="cw-btn-secondary">Apply Filters</button>
+      <button id="btn-reset-view" class="cw-btn-secondary">Reset View</button>
+      
+      <!-- Stats summary -->
+      <div id="topology-stats" class="cw-stats-panel">
+        <div class="cw-stat-item">
+          <span class="cw-stat-label">ASNs Visible</span>
+          <span class="cw-stat-value" id="stat-asn-count">0</span>
+        </div>
+        <div class="cw-stat-item">
+          <span class="cw-stat-label">Connections</span>
+          <span class="cw-stat-value" id="stat-edge-count">0</span>
+        </div>
+        <div class="cw-stat-item">
+          <span class="cw-stat-label">Total Traffic</span>
+          <span class="cw-stat-value" id="stat-total-traffic">0</span>
+        </div>
+      </div>
     </div>
-    <div id="graph-status" class="cw-banner"></div>
-  </div>
-  <form id="graph-form" class="cw-form">
-    <label for="asn">ASN</label>
-    <div class="cw-input-row">
-      <input type="number" id="asn" name="asn" placeholder="13335" min="1" required>
-      <button type="submit">Load neighbors</button>
+  </aside>
+  
+  <!-- Main topology canvas -->
+  <main class="cw-graph-main">
+    <!-- Zoom controls -->
+    <div class="cw-zoom-controls">
+      <button id="btn-zoom-in" class="cw-zoom-btn" title="Zoom In">+</button>
+      <button id="btn-zoom-reset" class="cw-zoom-btn" title="Reset Zoom">⊙</button>
+      <button id="btn-zoom-out" class="cw-zoom-btn" title="Zoom Out">−</button>
     </div>
-  </form>
-  <div id="graph-data" class="cw-result"></div>
-</section>
+    
+    <!-- Topology visualization area -->
+    <div id="topology-canvas" class="cw-topology-canvas">
+      <svg id="topology-svg" class="cw-topology-svg">
+        <defs>
+          <linearGradient id="edge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:#7cf3ff;stop-opacity:0.3" />
+            <stop offset="100%" style="stop-color:#9f7fff;stop-opacity:0.3" />
+          </linearGradient>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+            <feMerge>
+              <feMergeNode in="coloredBlur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
+        <g id="edges-group"></g>
+      </svg>
+      <div id="nodes-container" class="cw-nodes-container"></div>
+      <div id="loading-overlay" class="cw-loading-overlay">
+        <div class="cw-loader"></div>
+        <p>Loading topology...</p>
+      </div>
+    </div>
+  </main>
+  
+  <!-- Detail panel (slides in from right) -->
+  <aside id="detail-panel" class="cw-detail-panel">
+    <div class="cw-detail-header">
+      <h3 id="detail-title">ASN Details</h3>
+      <button id="btn-close-detail" class="cw-close-btn">&times;</button>
+    </div>
+    <div id="detail-content" class="cw-detail-content">
+      <!-- Content populated by JavaScript -->
+    </div>
+  </aside>
+</div>
+
+<main class="cw-page" style="display: none;">
+<!-- Reopen the main container for base.html structure -->
 {% endblock %}
 
 {% block scripts %}
-<script>
-  const graphForm = document.getElementById('graph-form');
-  const graphData = document.getElementById('graph-data');
-  const graphStatus = document.getElementById('graph-status');
-
-  function renderNeighbors(data) {
-    if (!data.neighbors || !data.neighbors.length) {
-      return '<p class="cw-muted">No neighbors found.</p>';
-    }
-    // Each neighbor has: neighbor_asn, observed_count, min_rtt, max_rtt, last_seen
-    const rows = data.neighbors.map((n) => {
-      const asn = n.neighbor_asn || n;
-      const count = n.observed_count != null ? n.observed_count : '—';
-      const rttInfo = n.min_rtt != null && n.max_rtt != null 
-        ? `${n.min_rtt.toFixed(1)}-${n.max_rtt.toFixed(1)}ms` 
-        : '—';
-      return `<div class="cw-neighbor-row">
-        <span class="cw-chip cw-chip-link" data-asn="${asn}">AS${asn}</span>
-        <span class="cw-muted">seen: ${count}</span>
-        <span class="cw-muted">RTT: ${rttInfo}</span>
-      </div>`;
-    }).join('');
-    return `<div class="cw-section"><h3>Neighbors of AS${data.asn}</h3><div class="cw-neighbor-list">${rows}</div></div>`;
-  }
-
-  function attachNeighborHandlers() {
-    document.querySelectorAll('.cw-chip-link[data-asn]').forEach((el) => {
-      el.addEventListener('click', () => {
-        const asn = el.getAttribute('data-asn');
-        if (asn) {
-          document.getElementById('asn').value = asn;
-          graphForm.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
-      });
-    });
-  }
-
-  graphForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const asn = document.getElementById('asn').value.trim();
-    if (!asn) return;
-
-    showMessage(graphStatus, 'Loading...', 'info');
-    graphData.innerHTML = '';
-
-    try {
-      const data = await fetchJson(`/graph/neighbors/${asn}`);
-      showMessage(graphStatus, 'Loaded', 'success');
-      graphData.innerHTML = renderNeighbors(data);
-      attachNeighborHandlers();
-    } catch (err) {
-      showMessage(graphStatus, err.message || 'Failed to load neighbors', 'error');
-      graphData.innerHTML = '';
-    }
-  });
-</script>
+<script src="/static/js/topology.js"></script>
 {% endblock %}
