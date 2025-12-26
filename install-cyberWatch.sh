@@ -252,6 +252,14 @@ ensure_local_db_and_user() {
 configure_neo4j() {
   local neo4j_password="$1"
   
+  # Validate password
+  if [[ -z "$neo4j_password" || "${#neo4j_password}" -lt 8 ]]; then
+    warn "Neo4j password is too short (${#neo4j_password} chars). Minimum 8 characters required."
+    warn "Generating a new secure password..."
+    neo4j_password="cyberwatch_$(generate_password)"
+    log "Generated password length: ${#neo4j_password} characters"
+  fi
+  
   log "Configuring Neo4j"
   
   # Stop Neo4j completely
@@ -282,6 +290,11 @@ configure_neo4j() {
   fi
   
   log "Neo4j password set, starting service"
+  
+  # Update the environment file with the actual password used
+  if sudo test -f "$ENV_FILE_DEST"; then
+    sudo sed -i "s|^NEO4J_PASSWORD=.*|NEO4J_PASSWORD=\"${neo4j_password}\"|" "$ENV_FILE_DEST" || true
+  fi
   
   # Start and enable Neo4j
   if command -v systemctl >/dev/null 2>&1; then
