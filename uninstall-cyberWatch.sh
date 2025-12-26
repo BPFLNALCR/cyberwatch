@@ -123,23 +123,29 @@ remove_neo4j() {
     return
   fi
   
-  if prompt_yes_no "Stop and disable Neo4j service?" "n"; then
-    log "Stopping Neo4j service"
+  if prompt_yes_no "Remove Neo4j and clean all data?" "y"; then
+    log "Stopping and disabling Neo4j service"
     sudo systemctl stop neo4j.service || true
     sudo systemctl disable neo4j.service || true
     
-    if prompt_yes_no "Remove Neo4j data at /var/lib/neo4j/data/?" "n"; then
-      log "Removing Neo4j data"
-      sudo rm -rf /var/lib/neo4j/data/* || true
-    fi
+    log "Removing all Neo4j data and configuration"
+    # Remove all Neo4j data including auth files
+    sudo rm -rf /var/lib/neo4j/data/* || true
+    sudo rm -rf /var/lib/neo4j/data/dbms/auth* || true
+    sudo rm -rf /var/lib/neo4j/data/databases/* || true
+    sudo rm -rf /var/lib/neo4j/data/transactions/* || true
+    sudo rm -rf /var/lib/neo4j/logs/* || true
+    
+    # Remove Neo4j configuration
+    sudo rm -rf /etc/neo4j/* || true
     
     if [[ "$PURGE_PACKAGES" == "yes" ]]; then
-      if prompt_yes_no "Purge Neo4j package?" "n"; then
-        log "Purging Neo4j package"
-        sudo apt-get purge -y neo4j || true
-        sudo rm -f /etc/apt/sources.list.d/neo4j.list || true
-        sudo rm -f /usr/share/keyrings/neo4j.gpg || true
-      fi
+      log "Purging Neo4j package"
+      sudo apt-get purge -y neo4j || true
+      sudo rm -f /etc/apt/sources.list.d/neo4j.list || true
+      sudo rm -f /usr/share/keyrings/neo4j.gpg || true
+    else
+      log "To fully remove Neo4j package, run with --purge flag"
     fi
   fi
 }
