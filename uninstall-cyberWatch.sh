@@ -7,7 +7,8 @@ SCHEMA_FILE="$ROOT_DIR/cyberWatch/db/schema.sql"
 ENV_FILE="/etc/cyberwatch/cyberwatch.env"
 DEFAULT_DSN="${CYBERWATCH_PG_DSN:-}"
 PURGE_PACKAGES="no"
-SYSTEMD_UNITS=(cyberWatch-api.service cyberWatch-ui.service cyberWatch-enrichment.service cyberWatch-dns-collector.service)
+SYSTEMD_UNITS=(cyberWatch-api.service cyberWatch-ui.service cyberWatch-enrichment.service cyberWatch-dns-collector.service cyberWatch-remeasure.service)
+SYSTEMD_TEMPLATE_UNITS=(cyberWatch-worker@.service)
 DNS_CONFIG_DEST="/etc/cyberwatch/dns.yaml"
 
 log() { printf "[cyberWatch] %s\n" "$*"; }
@@ -105,10 +106,31 @@ maybe_drop_tables() {
       read -r -s -p "PostgreSQL password (optional, Enter to skip): " pgpass || true
       echo
     fi
-    log "Dropping tables on $dsn"
-    if ! PGPASSWORD="$pgpass" psql "$dsn" -c "DROP TABLE IF EXISTS dns_queries, dns_targets, hops, measurements, targets CASCADE;"; then
+    log "Dropping all cyberWatch tables on $dsn"
+    if ! PGPASSWORD="$pgpass" psql "$dsn" -c "DROP TABLE IF EXISTS dns_queries, dns_targets, hops, measurements, targets, asns, settings CASCADE;"; then
       warn "Failed to drop tables. Check credentials/DSN and try again."
     fi
+    
+    # Optionally drop the entire database and user
+    if prompt_yes_no "Drop entire cyberWatch database and user?" "n"; then
+      log "Dropping cyberWatch database and user"
+      PGPASSWORD="$pgpass" psql "$dsn" -c "DROP DATABASE IF EXISTS cyberwatch;" 2>/dev/null || true
+      PGPASSWORD="$pgpass" psql "$dsn" -c "DROP USER IF EXISTS cyberwatch;" 2>/dev/null || true
+    fi
+  fi
+}
+
+remove_redis_data() {
+  if ! command -v redis-cli >/dev/null 2>&1; then
+    log "redis-cli not found; skipping Redis cleanup."
+    return
+  fi
+  
+  if prompt_yes_no "Clear cyberWatch Redis queues and data?" "y"; then
+    log "Clearing cyberWatch Redis data"
+    redis-cli DEL cyberwatch:targets 2>/dev/null || true
+    redis-cli KEYS "cyberwatch:*" | xargs -r redis-cli DEL 2>/dev/null || true
+    log "Redis data cleared"
   fi
 }
 
@@ -167,15 +189,37 @@ clean_var_lib() {
 }
 
 remove_services() {
+  # Stop and disable regular services
   for unit in "${SYSTEMD_UNITS[@]}"; do
     if systemctl list-unit-files | grep -q "$unit"; then
-      log "Disabling $unit"
+      log "Stopping and disabling $unit"
       sudo systemctl stop "$unit" || true
       sudo systemctl disable "$unit" || true
       sudo rm -f "/etc/systemd/system/$unit"
     fi
   done
+  
+  # Stop and disable template-based services (workers)
+  for unit in "${SYSTEMD_TEMPLATE_UNITS[@]}"; do
+    if systemctl list-unit-files | grep -q "$unit"; then
+      log "Stopping and disabling all $unit instances"
+      # Stop all running instances
+      sudo systemctl stop "${unit%@*}@*.service" 2>/dev/null || true
+      # Disable all enabled instances
+      for instance in /etc/systemd/system/multi-user.target.wants/${unit%@*}@*.service; do
+        if [[ -f "$instance" ]]; then
+          instance_name=$(basename "$instance")
+          log "Disabling $instance_name"
+          sudo systemctl disable "$instance_name" || true
+        fi
+      done
+      # Remove template file
+      sudo rm -f "/etc/systemd/system/$unit"
+    fi
+  done
+  
   sudo systemctl daemon-reload || true
+  log "All cyberWatch services removed"
 }
 
 remove_dns_config() {
@@ -185,15 +229,52 @@ remove_dns_config() {
   fi
 }
 
+remove_config_files() {
+  if prompt_yes_no "Remove all cyberWatch config files in /etc/cyberwatch/?" "y"; then
+    log "Removing /etc/cyberwatch directory"
+    sudo rm -rf /etc/cyberwatch || true
+  fi
+}
+
+remove_logs() {
+  if [[ -d "$ROOT_DIR/logs" ]] && prompt_yes_no "Remove log files in $ROOT_DIR/logs/?" "y"; then
+    log "Removing logs directory"
+    rm -rf "$ROOT_DIR/logs" || true
+  fi
+}
+
 main() {
+  log "Starting cyberWatch uninstallation..."
+  log ""
+  
+  # Stop and remove all services first
   remove_services
-  remove_venv
+  
+  # Clean up data stores
+  remove_redis_data
   maybe_drop_tables
   remove_neo4j
+  
+  # Remove application files
+  remove_venv
+  remove_logs
   clean_var_lib
-  remove_dns_config
+  
+  # Remove configuration
+  remove_config_files  # This includes DNS config
+  
+  # Optionally purge packages
   purge_packages
-  log "Uninstall complete."
+  
+  log ""
+  log "=== Uninstall complete ==="
+  log ""
+  log "Remaining manual cleanup (if needed):"
+  log "  - Review and remove: $ROOT_DIR (source code)"
+  log "  - Check PostgreSQL: psql -c '\\l' (for cyberwatch database)"
+  log "  - Check Redis: redis-cli KEYS 'cyberwatch:*'"
+  log "  - Check Neo4j: sudo systemctl status neo4j"
+  log ""
 }
 
 main "$@"
