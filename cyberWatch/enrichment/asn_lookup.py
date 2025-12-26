@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import dns.asyncresolver
 from pydantic import BaseModel
@@ -37,15 +37,16 @@ def _cache_set(ip: str, info: AsnInfo) -> None:
     _cache[ip] = (time.time(), info)
 
 
-async def lookup_asn(ip: str) -> AsnInfo:
-    cached = _cache_get(ip)
+async def lookup_asn(ip: Any) -> AsnInfo:
+    ip_str = str(ip)
+    cached = _cache_get(ip_str)
     if cached:
         return cached
 
-    info = await _lookup_whois(ip)
+    info = await _lookup_whois(ip_str)
     if info.asn is None:
-        info = await _lookup_dns(ip)
-    _cache_set(ip, info)
+        info = await _lookup_dns(ip_str)
+    _cache_set(ip_str, info)
     return info
 
 

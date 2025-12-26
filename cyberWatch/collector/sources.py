@@ -238,6 +238,37 @@ class PiholeApiSource:
         qtype = str(qtype_val) if qtype_val is not None else None
         return ts, domain, client_ip, qtype
 
+    def _is_blocked_status(self, status_value: Any) -> bool:
+        if status_value is None:
+            return False
+
+        if isinstance(status_value, bool):
+            return status_value
+
+        if isinstance(status_value, (int, float)):
+            # Pi-hole query log status codes: 1=forwarded, 2=cached, 3+=blocked variants.
+            try:
+                return int(status_value) >= 3
+            except Exception:
+                return False
+
+        s = str(status_value).strip().lower()
+        if not s:
+            return False
+        if "block" in s or "gravity" in s or "deny" in s:
+            return True
+        return False
+
+    def _is_blocked_query_v6(self, row: Dict[str, Any]) -> bool:
+        # Common shapes across Pi-hole builds/patch levels.
+        if row.get("blocked") is True or row.get("is_blocked") is True:
+            return True
+
+        for key in ("status", "reply", "action"):
+            if key in row and self._is_blocked_status(row.get(key)):
+                return True
+        return False
+
     async def _fetch_v6(self) -> List[DNSQuery]:
         """Fetch queries using Pi-hole v6 API."""
         sid = await self._authenticate_v6()
@@ -293,6 +324,7 @@ class PiholeApiSource:
         parsed = 0
         skipped_cursor = 0
         skipped_missing = 0
+        skipped_blocked = 0
         parse_errors = 0
         
         for row in rows:
@@ -300,6 +332,9 @@ class PiholeApiSource:
                 # v6 format: each row is a dict with keys like:
                 # {time, domain, client, type, status, ...}
                 if isinstance(row, dict):
+                    if self._is_blocked_query_v6(row):
+                        skipped_blocked += 1
+                        continue
                     ts_raw, domain, client_ip, qtype = self._extract_v6_fields(row)
                 else:
                     # Fallback for array format
@@ -307,6 +342,12 @@ class PiholeApiSource:
                     domain = row[2] if len(row) > 2 else ""
                     client_ip = row[3] if len(row) > 3 else None
                     qtype = str(row[1]) if len(row) > 1 else None
+
+                    # Heuristic: v5-style array format includes status at index 4.
+                    status_val = row[4] if len(row) > 4 else None
+                    if self._is_blocked_status(status_val):
+                        skipped_blocked += 1
+                        continue
 
                 if not domain or ts_raw is None:
                     skipped_missing += 1
@@ -340,6 +381,7 @@ class PiholeApiSource:
                     "parsed": parsed,
                     "skipped_cursor": skipped_cursor,
                     "skipped_missing": skipped_missing,
+                    "skipped_blocked": skipped_blocked,
                     "parse_errors": parse_errors,
                     "last_seen_ts": self.last_seen_ts,
                 },
@@ -352,6 +394,7 @@ class PiholeApiSource:
                     "parsed": parsed,
                     "skipped_cursor": skipped_cursor,
                     "skipped_missing": skipped_missing,
+                    "skipped_blocked": skipped_blocked,
                     "parse_errors": parse_errors,
                 },
             )
@@ -383,7 +426,11 @@ class PiholeApiSource:
                 domain = row[2]
                 client_ip = row[3] if len(row) >= 4 else None
                 qtype = str(row[1]) if len(row) >= 2 else None
+                status_val = row[4] if len(row) >= 5 else None
             except (ValueError, TypeError, IndexError):
+                continue
+
+            if self._is_blocked_status(status_val):
                 continue
             
             if ts_raw <= self.last_seen_ts:
