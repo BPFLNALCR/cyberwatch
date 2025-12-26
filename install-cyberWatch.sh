@@ -56,10 +56,23 @@ require_debian() {
 
 install_packages() {
   # NOTE: postgresql-client alone is not sufficient; we need the server running for localhost schema application.
-  local pkgs=(python3 python3-venv python3-pip redis-server postgresql postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq)
+  local pkgs=(python3 python3-venv python3-pip redis-server postgresql postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq apt-transport-https ca-certificates gnupg)
   log "Installing system packages: ${pkgs[*]}"
   sudo apt-get update -y
   sudo apt-get install -y "${pkgs[@]}"
+  
+  # Add Neo4j repository and install if not already present
+  if ! dpkg -l | grep -q "^ii.*neo4j"; then
+    log "Adding Neo4j repository"
+    curl -fsSL https://debian.neo4j.com/neotechnology.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/neo4j.gpg
+    echo "deb [signed-by=/usr/share/keyrings/neo4j.gpg] https://debian.neo4j.com stable latest" | \
+      sudo tee /etc/apt/sources.list.d/neo4j.list >/dev/null
+    sudo apt-get update -y
+    log "Installing Neo4j"
+    sudo apt-get install -y neo4j
+  else
+    log "Neo4j already installed"
+  fi
 }
 
 read_env_var() {
@@ -236,21 +249,87 @@ ensure_local_db_and_user() {
   printf '%s' "postgresql://${user}:${password}@${host:-localhost}:${port}/${dbname}"
 }
 
+configure_neo4j() {
+  local neo4j_password="$1"
+  
+  log "Configuring Neo4j"
+  
+  # Enable and start Neo4j service
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files >/dev/null 2>&1; then
+      sudo systemctl enable neo4j.service >/dev/null 2>&1 || true
+      sudo systemctl start neo4j.service || true
+    fi
+  fi
+  
+  # Wait for Neo4j to be ready
+  log "Waiting for Neo4j to start..."
+  local tries=30
+  while (( tries > 0 )); do
+    if curl -s http://localhost:7474 >/dev/null 2>&1; then
+      log "Neo4j is ready"
+      break
+    fi
+    sleep 2
+    tries=$((tries - 1))
+  done
+  
+  if (( tries == 0 )); then
+    warn "Neo4j did not become ready in time. You may need to configure it manually."
+    warn "Run: cypher-shell -u neo4j -p neo4j"
+    warn "Then: ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO 'your_password'"
+    return 1
+  fi
+  
+  # Change default password
+  log "Setting Neo4j password"
+  if command -v cypher-shell >/dev/null 2>&1; then
+    cypher-shell -u neo4j -p neo4j "ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO '${neo4j_password}'" 2>/dev/null || {
+      log "Neo4j password already set or authentication failed (this is normal if already configured)"
+    }
+    
+    # Apply schema constraints/indexes
+    log "Creating Neo4j constraints and indexes"
+    cypher-shell -u neo4j -p "${neo4j_password}" <<'CYPHER' 2>/dev/null || true
+CREATE CONSTRAINT asn_unique IF NOT EXISTS FOR (a:AS) REQUIRE a.asn IS UNIQUE;
+CREATE INDEX asn_org_name IF NOT EXISTS FOR (a:AS) ON (a.org_name);
+CREATE INDEX asn_country IF NOT EXISTS FOR (a:AS) ON (a.country);
+CYPHER
+  else
+    warn "cypher-shell not found. Install Neo4j or run schema commands manually."
+  fi
+  
+  log "Neo4j configuration complete"
+}
+
 write_env_file() {
-  local dsn
+  local dsn neo4j_password
   dsn="$(sanitize_dsn "$1")"
+  neo4j_password="${2:-$(generate_password)}"
   sudo mkdir -p "$ENV_DIR"
 
   if sudo test -f "$ENV_FILE_DEST"; then
     local existing
     existing="$(sanitize_dsn "$(read_env_var "$ENV_FILE_DEST" "CYBERWATCH_PG_DSN" || true)")"
     if [[ -n "$existing" && "$existing" == "$dsn" ]]; then
-      return 0
+      # DSN matches, check if we should update Neo4j password
+      local existing_neo4j_pass
+      existing_neo4j_pass="$(read_env_var "$ENV_FILE_DEST" "NEO4J_PASSWORD" || true)"
+      if [[ "$existing_neo4j_pass" == "neo4j" ]]; then
+        log "Updating Neo4j password in $ENV_FILE_DEST"
+      else
+        # Return existing Neo4j password
+        printf '%s' "${existing_neo4j_pass:-$neo4j_password}"
+        return 0
+      fi
     fi
     if prompt_yes_no "Update $ENV_FILE_DEST with the selected DSN?" "y"; then
       log "Updating $ENV_FILE_DEST"
     else
       log "Keeping existing $ENV_FILE_DEST"
+      local existing_neo4j_pass
+      existing_neo4j_pass="$(read_env_var "$ENV_FILE_DEST" "NEO4J_PASSWORD" || true)"
+      printf '%s' "${existing_neo4j_pass:-$neo4j_password}"
       return 0
     fi
   else
@@ -262,9 +341,10 @@ CYBERWATCH_PG_DSN="$dsn"
 CYBERWATCH_REDIS_URL="redis://localhost:6379/0"
 NEO4J_URI="bolt://localhost:7687"
 NEO4J_USER="neo4j"
-NEO4J_PASSWORD="neo4j"
+NEO4J_PASSWORD="$neo4j_password"
 EOF
   sudo chmod 0640 "$ENV_FILE_DEST" || true
+  printf '%s' "$neo4j_password"
 }
 
 create_venv() {
@@ -364,8 +444,18 @@ main() {
       dsn="$synthesized"
     fi
     apply_schema "$dsn"
-    # Persist the final DSN for systemd services.
-    write_env_file "$dsn"
+    
+    # Persist the final DSN and generate Neo4j password
+    local neo4j_password
+    neo4j_password=$(write_env_file "$dsn")
+    
+    # Configure Neo4j with generated password
+    if prompt_yes_no "Configure Neo4j now?" "y"; then
+      configure_neo4j "$neo4j_password"
+    else
+      log "Skipping Neo4j configuration. You can configure it manually later."
+      log "Default password is stored in $ENV_FILE_DEST"
+    fi
   else
     log "Skipping schema application."
   fi

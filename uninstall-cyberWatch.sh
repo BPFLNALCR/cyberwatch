@@ -112,6 +112,38 @@ maybe_drop_tables() {
   fi
 }
 
+remove_neo4j() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    log "systemctl not found; skipping Neo4j removal."
+    return
+  fi
+  
+  if ! systemctl list-unit-files | grep -q "neo4j.service"; then
+    log "Neo4j service not found; skipping Neo4j removal."
+    return
+  fi
+  
+  if prompt_yes_no "Stop and disable Neo4j service?" "n"; then
+    log "Stopping Neo4j service"
+    sudo systemctl stop neo4j.service || true
+    sudo systemctl disable neo4j.service || true
+    
+    if prompt_yes_no "Remove Neo4j data at /var/lib/neo4j/data/?" "n"; then
+      log "Removing Neo4j data"
+      sudo rm -rf /var/lib/neo4j/data/* || true
+    fi
+    
+    if [[ "$PURGE_PACKAGES" == "yes" ]]; then
+      if prompt_yes_no "Purge Neo4j package?" "n"; then
+        log "Purging Neo4j package"
+        sudo apt-get purge -y neo4j || true
+        sudo rm -f /etc/apt/sources.list.d/neo4j.list || true
+        sudo rm -f /usr/share/keyrings/neo4j.gpg || true
+      fi
+    fi
+  fi
+}
+
 purge_packages() {
   if [[ "$PURGE_PACKAGES" != "yes" ]]; then
     return
@@ -151,6 +183,7 @@ main() {
   remove_services
   remove_venv
   maybe_drop_tables
+  remove_neo4j
   clean_var_lib
   remove_dns_config
   purge_packages

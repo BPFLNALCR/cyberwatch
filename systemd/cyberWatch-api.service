@@ -1,6 +1,7 @@
 [Unit]
 Description=CyberWatch API Service
-After=network.target redis-server.service postgresql.service
+After=network.target redis-server.service postgresql.service neo4j.service
+Wants=neo4j.service
 
 [Service]
 Type=simple

@@ -50,7 +50,7 @@ DNS activity from a local resolver (e.g., Pi-hole) can be turned into measuremen
 - Grafana JSON dashboards for latency, hopcount, and ASN performance sourced from PostgreSQL (`measurements`, `hops`, `targets`).
 
 ## Architecture Overview
-Core runtime is a Debian VM (or containerized) running Python services plus Redis, PostgreSQL, and Neo4j. Systemd units manage API, UI, enrichment loop, and the DNS collector. Data flow:
+Core runtime is a Debian VM running Python services plus Redis, PostgreSQL, and Neo4j. Systemd units manage API, UI, enrichment loop, and the DNS collector. Data flow:
 
 ```
 DNS logs/API → DNS collector → Redis target queue → measurement workers → PostgreSQL
@@ -88,9 +88,10 @@ cd cyberwatch
 ./install-cyberWatch.sh
 ```
 3) Installer actions (from [install-cyberWatch.sh](install-cyberWatch.sh)):
-- Installs apt packages: python3, python3-venv, python3-pip, redis-server, postgresql-client, libpq-dev, traceroute, scamper, mtr-tiny, curl, jq.
+- Installs apt packages: python3, python3-venv, python3-pip, redis-server, postgresql, postgresql-client, libpq-dev, neo4j, traceroute, scamper, mtr-tiny, curl, jq.
 - Creates `.venv` and installs [cyberWatch/requirements.txt](cyberWatch/requirements.txt).
 - Optionally applies PostgreSQL schemas [cyberWatch/db/schema.sql](cyberWatch/db/schema.sql) and [cyberWatch/db/dns_schema.sql](cyberWatch/db/dns_schema.sql) to DSN `CYBERWATCH_PG_DSN` (default `postgresql://postgres:postgres@localhost:5432/cyberWatch`).
+- Configures Neo4j with secure password, creates graph constraints and indexes.
 - Persists runtime configuration for systemd services to `/etc/cyberwatch/cyberwatch.env` (including `CYBERWATCH_PG_DSN`, Redis URL, and Neo4j credentials).
 - Installs DNS config to `/etc/cyberwatch/dns.yaml` from [config/cyberwatch_dns.example.yaml](config/cyberwatch_dns.example.yaml) if absent.
 - Installs/enables systemd units: [systemd/cyberWatch-api.service](systemd/cyberWatch-api.service), [systemd/cyberWatch-ui.service](systemd/cyberWatch-ui.service), [systemd/cyberWatch-enrichment.service](systemd/cyberWatch-enrichment.service), [systemd/cyberWatch-dns-collector.service](systemd/cyberWatch-dns-collector.service).

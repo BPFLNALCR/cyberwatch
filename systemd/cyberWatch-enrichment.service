@@ -1,6 +1,7 @@
 [Unit]
 Description=CyberWatch Enrichment Service
-After=network.target postgresql.service redis-server.service
+After=network.target postgresql.service redis-server.service neo4j.service
+Wants=neo4j.service
 
 [Service]
 Type=simple

@@ -107,7 +107,7 @@ Conceptual diagram:
 
 ## 4. Deployment Model
 
-### 4.1 Baseline: Single Debian VM
+### 4.1 Single Debian VM
 
 The core system runs on a **single Debian VM**, which hosts:
 
@@ -119,15 +119,6 @@ The core system runs on a **single Debian VM**, which hosts:
 * Grafana (dashboards).
 
 This VM can be created on Proxmox or any other hypervisor. Vertical scaling is achieved by giving more CPU/RAM to the VM.
-
-### 4.2 Optional: Containerized Subcomponents
-
-If desired, the VM can run:
-
-* Databases (PostgreSQL, Neo4j, Grafana) inside Docker/Podman containers.
-* Python services either directly on the host or also containerized.
-
-The architecture does not depend on containers; they are an operational choice.
 
 ---
 
