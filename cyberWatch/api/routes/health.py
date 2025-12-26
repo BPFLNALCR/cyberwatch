@@ -38,7 +38,15 @@ async def _check_neo4j(driver: AsyncDriver) -> dict:
             val = record["ok"] if record else None
         return {"ok": bool(val), "message": "Connected" if val else "Unexpected response"}
     except Exception as exc:
-        return {"ok": False, "message": str(exc)}
+        # Simplify error message for display
+        error_str = str(exc)
+        if "Failed to establish connection" in error_str or "Connect call failed" in error_str:
+            return {"ok": False, "message": "Not running (using PostgreSQL fallback)"}
+        elif "localhost" in error_str or "7687" in error_str:
+            return {"ok": False, "message": "Cannot connect to Neo4j service"}
+        else:
+            # Truncate long error messages
+            return {"ok": False, "message": error_str[:100] + "..." if len(error_str) > 100 else error_str}
 
 
 @router.get("")

@@ -369,57 +369,50 @@ async def _get_top_asns_by_traffic(
     """Get top ASNs by traffic/activity with their immediate neighbors."""
     # Build WHERE clause for country filter
     where_clause = ""
-    params = [limit * 2]  # Get more initially for filtering
+    params = [limit]
     if country_filter:
-        where_clause = "AND h.country_code = $2"
+        where_clause = "AND country_code = $2"
         params.append(country_filter.upper())
     
-    # Get top ASNs by measurement count (traffic proxy)
+    # Get top ASNs by measurement count (traffic proxy) - simplified query
     query = f"""
     SELECT 
-        h.asn,
-        h.org_name,
-        h.country_code as country,
-        COUNT(DISTINCT h.measurement_id) as measurement_count,
-        AVG(h.rtt_ms) as avg_rtt,
-        MIN(h.created_at) as first_seen,
-        MAX(h.created_at) as last_seen,
-        COUNT(DISTINCT h2.asn) as neighbor_count
-    FROM hops h
-    LEFT JOIN hops h2 ON h.measurement_id = h2.measurement_id 
-        AND h2.asn IS NOT NULL 
-        AND h2.asn != h.asn
-        AND ABS(h.hop_number - h2.hop_number) = 1
-    WHERE h.asn IS NOT NULL {where_clause}
-    GROUP BY h.asn, h.org_name, h.country_code
+        asn,
+        MAX(org_name) as org_name,
+        MAX(country_code) as country,
+        COUNT(DISTINCT measurement_id) as measurement_count,
+        AVG(rtt_ms) as avg_rtt,
+        MIN(created_at) as first_seen,
+        MAX(created_at) as last_seen
+    FROM hops
+    WHERE asn IS NOT NULL {where_clause}
+    GROUP BY asn
     """
     
     # Add sorting
     if sort_by == "rtt":
         query += " ORDER BY avg_rtt ASC NULLS LAST"
-    elif sort_by == "neighbors":
-        query += " ORDER BY neighbor_count DESC"
     elif sort_by == "country":
-        query += " ORDER BY h.country_code ASC, measurement_count DESC"
-    else:  # Default to traffic
+        query += " ORDER BY country ASC, measurement_count DESC"
+    else:  # Default to traffic or neighbors
         query += " ORDER BY measurement_count DESC"
     
     query += " LIMIT $1"
     
     rows = await pool.fetch(query, *params)
     
-    # Limit to requested amount
-    rows = rows[:limit]
-    
     if not rows:
+        logger.warning("No ASN data found in database")
         return ok({
             "nodes": [],
             "edges": [],
             "source": "postgresql",
-            "message": "No ASN data available",
+            "message": "No ASN data available. Please run some traceroutes first.",
         })
     
     asns = [row["asn"] for row in rows]
+    logger.info(f"Found {len(asns)} ASNs, getting enrichment data")
+    
     enrichment_data = await _get_enrichment_data(asns, pool)
     
     # Get connections between top ASNs
@@ -428,8 +421,8 @@ async def _get_top_asns_by_traffic(
         h1.asn as source,
         h2.asn as target,
         COUNT(*) as observed_count,
-        MIN(GREATEST(h1.rtt_ms, h2.rtt_ms)) as min_rtt,
-        MAX(GREATEST(h1.rtt_ms, h2.rtt_ms)) as max_rtt
+        MIN(LEAST(COALESCE(h1.rtt_ms, 0), COALESCE(h2.rtt_ms, 0))) as min_rtt,
+        MAX(GREATEST(COALESCE(h1.rtt_ms, 0), COALESCE(h2.rtt_ms, 0))) as max_rtt
     FROM hops h1
     JOIN hops h2 ON h1.measurement_id = h2.measurement_id
     WHERE h1.asn = ANY($1::int[])
@@ -439,7 +432,12 @@ async def _get_top_asns_by_traffic(
     GROUP BY h1.asn, h2.asn
     """
     
-    edge_rows = await pool.fetch(edges_query, asns)
+    try:
+        edge_rows = await pool.fetch(edges_query, asns)
+        logger.info(f"Found {len(edge_rows)} edges between ASNs")
+    except Exception as e:
+        logger.error(f"Failed to get edges: {e}")
+        edge_rows = []
     
     nodes = []
     for row in rows:
@@ -448,12 +446,12 @@ async def _get_top_asns_by_traffic(
         
         nodes.append({
             "asn": asn_num,
-            "org_name": row["org_name"] or enrich.get("org_name", f"AS{asn_num}"),
+            "org_name": row["org_name"] or enrich.get("org_name") or f"AS{asn_num}",
             "country": row["country"] or enrich.get("country"),
             "measurement_count": row["measurement_count"],
-            "dns_query_count": enrich.get("dns_query_count", 0),
+            "dns_query_count": 0,  # Simplified - not critical
             "avg_rtt": float(row["avg_rtt"]) if row["avg_rtt"] else None,
-            "neighbor_count": row["neighbor_count"],
+            "neighbor_count": enrich.get("neighbor_count", 0),
             "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
             "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
         })
@@ -463,11 +461,13 @@ async def _get_top_asns_by_traffic(
             "source": row["source"],
             "target": row["target"],
             "observed_count": row["observed_count"],
-            "min_rtt": float(row["min_rtt"]) if row["min_rtt"] else None,
-            "max_rtt": float(row["max_rtt"]) if row["max_rtt"] else None,
+            "min_rtt": float(row["min_rtt"]) if row["min_rtt"] and row["min_rtt"] > 0 else None,
+            "max_rtt": float(row["max_rtt"]) if row["max_rtt"] and row["max_rtt"] > 0 else None,
         }
         for row in edge_rows
     ]
+    
+    logger.info(f"Returning {len(nodes)} nodes and {len(edges)} edges")
     
     return ok({
         "nodes": nodes,
@@ -489,7 +489,6 @@ async def _get_enrichment_data(asns: List[int], pool: asyncpg.Pool) -> dict:
         asn,
         COUNT(DISTINCT measurement_id) as measurement_count,
         AVG(rtt_ms) as avg_rtt,
-        COUNT(DISTINCT country_code) as countries_count,
         MAX(org_name) as org_name,
         MAX(country_code) as country,
         MIN(created_at) as first_seen,
@@ -511,9 +510,11 @@ async def _get_enrichment_data(asns: List[int], pool: asyncpg.Pool) -> dict:
             "country": row["country"],
             "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
             "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+            "neighbor_count": 0,
+            "dns_query_count": 0,
         }
     
-    # Get neighbor counts
+    # Get neighbor counts - simplified
     neighbor_query = """
     SELECT 
         h1.asn,
@@ -527,37 +528,13 @@ async def _get_enrichment_data(asns: List[int], pool: asyncpg.Pool) -> dict:
     GROUP BY h1.asn
     """
     
-    neighbor_rows = await pool.fetch(neighbor_query, asns)
-    for row in neighbor_rows:
-        asn = row["asn"]
-        if asn in result:
-            result[asn]["neighbor_count"] = row["neighbor_count"]
-    
-    # Try to get DNS query counts (if dns schema exists)
     try:
-        dns_query = """
-        SELECT 
-            h.asn,
-            COUNT(DISTINCT dq.id) as dns_query_count
-        FROM hops h
-        JOIN targets t ON h.hop_ip = t.target_ip
-        JOIN dns_targets dt ON t.target_ip = dt.resolved_ip
-        JOIN dns_queries dq ON dt.domain = dq.domain
-        WHERE h.asn = ANY($1::int[])
-        GROUP BY h.asn
-        """
-        dns_rows = await pool.fetch(dns_query, asns)
-        for row in dns_rows:
+        neighbor_rows = await pool.fetch(neighbor_query, asns)
+        for row in neighbor_rows:
             asn = row["asn"]
             if asn in result:
-                result[asn]["dns_query_count"] = row["dns_query_count"]
-    except Exception:
-        # DNS schema might not exist, skip
-        pass
-    
-    # Fill in DNS query count as 0 for ASNs without data
-    for asn in asns:
-        if asn in result and "dns_query_count" not in result[asn]:
-            result[asn]["dns_query_count"] = 0
+                result[asn]["neighbor_count"] = row["neighbor_count"]
+    except Exception as e:
+        logger.warning(f"Failed to get neighbor counts: {e}")
     
     return result
