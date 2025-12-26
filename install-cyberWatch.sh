@@ -281,16 +281,51 @@ configure_neo4j() {
     return 1
   fi
   
-  # Change default password
+  # Change default password using neo4j-admin (non-interactive)
   log "Setting Neo4j password"
-  if command -v cypher-shell >/dev/null 2>&1; then
-    cypher-shell -u neo4j -p neo4j "ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO '${neo4j_password}'" 2>/dev/null || {
-      log "Neo4j password already set or authentication failed (this is normal if already configured)"
+  
+  # First, stop Neo4j to set initial password
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl stop neo4j.service || true
+  fi
+  
+  # Use neo4j-admin to set initial password (works even if already set)
+  if command -v neo4j-admin >/dev/null 2>&1; then
+    sudo neo4j-admin dbms set-initial-password "${neo4j_password}" 2>/dev/null || {
+      log "Could not set initial password with neo4j-admin, trying alternative method"
+      # Alternative: delete auth file and set password
+      sudo rm -f /var/lib/neo4j/data/dbms/auth /var/lib/neo4j/data/dbms/auth.ini 2>/dev/null || true
+      sudo neo4j-admin dbms set-initial-password "${neo4j_password}" 2>/dev/null || {
+        warn "Failed to set Neo4j password. You may need to set it manually."
+      }
     }
-    
-    # Apply schema constraints/indexes
+  else
+    warn "neo4j-admin not found. Password may need to be set manually."
+  fi
+  
+  # Restart Neo4j
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl start neo4j.service || true
+  fi
+  
+  # Wait for Neo4j to be ready again
+  log "Waiting for Neo4j to restart..."
+  local tries=30
+  while (( tries > 0 )); do
+    if curl -s http://localhost:7474 >/dev/null 2>&1; then
+      log "Neo4j is ready"
+      break
+    fi
+    sleep 2
+    tries=$((tries - 1))
+  done
+  
+  # Apply schema constraints/indexes
+  if command -v cypher-shell >/dev/null 2>&1; then
     log "Creating Neo4j constraints and indexes"
-    cypher-shell -u neo4j -p "${neo4j_password}" <<'CYPHER' 2>/dev/null || true
+    cypher-shell -u neo4j -p "${neo4j_password}" <<'CYPHER' 2>/dev/null || {
+      warn "Failed to create constraints/indexes. They can be created later via Neo4j Browser."
+    }
 CREATE CONSTRAINT asn_unique IF NOT EXISTS FOR (a:AS) REQUIRE a.asn IS UNIQUE;
 CREATE INDEX asn_org_name IF NOT EXISTS FOR (a:AS) ON (a.org_name);
 CREATE INDEX asn_country IF NOT EXISTS FOR (a:AS) ON (a.country);
