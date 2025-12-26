@@ -17,6 +17,7 @@ from cyberWatch.db.settings import (
     request_collector_restart,
     get_collector_status,
 )
+from cyberWatch.enrichment import enricher
 from cyberWatch.logging_config import get_logger
 
 logger = get_logger("api")
@@ -390,6 +391,76 @@ async def clear_measurements(
             extra={"request_id": request_id, "outcome": "error"}
         )
         return err(str(exc))
+
+
+@router.post("/enrich")
+async def trigger_enrichment(
+    pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
+):
+    """Manually trigger enrichment of unenriched hops."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    # Check how many hops need enrichment
+    unenriched = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM hops h
+        JOIN measurements m ON m.id = h.measurement_id
+        WHERE h.hop_ip IS NOT NULL
+          AND h.asn IS NULL
+          AND m.success = TRUE
+        """
+    )
+    
+    if unenriched == 0:
+        return ok({
+            "success": True,
+            "message": "No hops need enrichment - all data is up to date!",
+            "unenriched_count": 0,
+            "enriched": 0,
+        })
+    
+    # Run enrichment synchronously (block until complete)
+    try:
+        logger.info(f"Manual enrichment triggered for {unenriched} hops",
+                   extra={"request_id": request_id, "unenriched_count": unenriched})
+        
+        await enricher.run_once(pool)
+        
+        # Check remaining unenriched after processing
+        remaining = await pool.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM hops h
+            JOIN measurements m ON m.id = h.measurement_id
+            WHERE h.hop_ip IS NOT NULL
+              AND h.asn IS NULL
+              AND m.success = TRUE
+            """
+        )
+        
+        enriched_count = unenriched - remaining
+        
+        logger.info(f"Manual enrichment completed: {enriched_count} hops enriched, {remaining} remaining",
+                   extra={"request_id": request_id, "enriched": enriched_count, "remaining": remaining})
+        
+        return ok({
+            "success": True,
+            "message": f"Enriched {enriched_count} hops successfully! {remaining} remaining (if any had errors).",
+            "unenriched_count": unenriched,
+            "enriched": enriched_count,
+            "remaining": remaining,
+        })
+    except Exception as e:
+        logger.error(f"Manual enrichment failed: {e}", exc_info=True,
+                    extra={"request_id": request_id})
+        return ok({
+            "success": False,
+            "message": f"Enrichment failed: {str(e)}",
+            "unenriched_count": unenriched,
+            "enriched": 0,
+        })
 
 
 @router.post("/clear-dns")

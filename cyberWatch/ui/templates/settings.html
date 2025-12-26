@@ -122,6 +122,33 @@
 <section class="cw-card">
   <div class="cw-card-header">
     <div>
+      <p class="cw-eyebrow">Data Enrichment</p>
+      <h2 class="cw-h2">ASN Enrichment</h2>
+    </div>
+    <div id="enrich-status" class="cw-banner"></div>
+  </div>
+  
+  <p class="cw-body">
+    Enrich traceroute hop data with ASN information, organization names, and geographic data. 
+    This is required for ASN Explorer and Graph View to work properly.
+  </p>
+
+  <div class="cw-alert cw-alert-info">
+    <strong>Note:</strong> Enrichment queries external services (Team Cymru and PeeringDB) for each hop IP address. 
+    This may take a few moments depending on how many hops need enrichment.
+  </div>
+
+  <div class="cw-input-row" style="margin-top: 1rem;">
+    <button type="button" id="enrich-btn" class="cw-btn-primary" style="width: auto;">
+      <span id="enrich-btn-text">Enrich Data Now</span>
+    </button>
+    <span id="enrich-result" class="cw-muted" style="align-self: center;"></span>
+  </div>
+</section>
+
+<section class="cw-card">
+  <div class="cw-card-header">
+    <div>
       <p class="cw-eyebrow">Data Management</p>
       <h2 class="cw-h2">Clear Database</h2>
     </div>
@@ -460,6 +487,47 @@
   const clearDnsBtn = document.getElementById("clear-dns-btn");
   const clearGraphBtn = document.getElementById("clear-graph-btn");
   const clearAllBtn = document.getElementById("clear-all-btn");
+  
+  // Enrichment functionality
+  const enrichBtn = document.getElementById("enrich-btn");
+  const enrichBtnText = document.getElementById("enrich-btn-text");
+  const enrichResult = document.getElementById("enrich-result");
+  const enrichStatus = document.getElementById("enrich-status");
+  
+  enrichBtn.addEventListener("click", async () => {
+    enrichBtn.disabled = true;
+    enrichBtnText.textContent = "Enriching...";
+    enrichResult.textContent = "Processing hops...";
+    showMessage(enrichStatus, "Enriching hop data...", "info");
+    
+    try {
+      const result = await fetchJson("/settings/enrich", {
+        method: "POST",
+        timeoutMs: 60000,  // 60 second timeout for enrichment
+      });
+      
+      if (result.success) {
+        showMessage(enrichStatus, result.message, "success");
+        enrichResult.textContent = `✓ ${result.enriched || 0} hops enriched`;
+        
+        // Show helpful message to check Graph View
+        if (result.enriched > 0) {
+          setTimeout(() => {
+            enrichResult.innerHTML = `<a href="/graph" style="color: #7cf3ff;">View enriched data in Graph View →</a>`;
+          }, 2000);
+        }
+      } else {
+        showMessage(enrichStatus, result.message || "Enrichment failed", "error");
+        enrichResult.textContent = "";
+      }
+    } catch (err) {
+      showMessage(enrichStatus, err.message || "Enrichment failed", "error");
+      enrichResult.textContent = "";
+    } finally {
+      enrichBtn.disabled = false;
+      enrichBtnText.textContent = "Enrich Data Now";
+    }
+  });
 
   // Helper function to handle clear operations
   async function handleClearOperation(endpoint, buttonElement, confirmMessage, successPrefix) {

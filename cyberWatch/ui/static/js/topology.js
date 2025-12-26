@@ -153,9 +153,12 @@ async function loadTopology(params = {}) {
     }
     
     url += queryParams.toString();
+    console.log('Fetching topology from:', url);
     const data = await fetchJson(url);
+    console.log('Topology response:', data);
     
     if (data.nodes && data.nodes.length > 0) {
+      console.log('Rendering', data.nodes.length, 'nodes and', (data.edges || []).length, 'edges');
       state.nodes = data.nodes.map(node => ({
         ...node,
         x: Math.random() * 800 + 200,
@@ -172,7 +175,9 @@ async function loadTopology(params = {}) {
       updateStats();
       showMessage(statusBanner, `Loaded ${state.nodes.length} ASNs`, 'success');
     } else {
-      showMessage(statusBanner, 'No ASN data available', 'error');
+      console.warn('No ASN data returned:', data);
+      const message = data.message || 'No ASN data available. Run traceroutes and click "Enrich Data" in Settings.';
+      showMessage(statusBanner, message, 'error');
       clearTopology();
     }
   } catch (err) {
