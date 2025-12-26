@@ -563,12 +563,12 @@ PYEOF
     # Install worker services (2 instances by default)
     local worker_count=2
     if [[ -f "$SYSTEMD_DIR/cyberWatch-worker@.service" ]]; then
-      log "Installing worker services (${worker_count} instances)"
-      sudo cp "$SYSTEMD_DIR/cyberWatch-worker@.service" /etc/systemd/system/
+      log "Installing worker template service"
+      sudo sed "s|@ROOT_DIR@|$ROOT_DIR|g" "$SYSTEMD_DIR/cyberWatch-worker@.service" | sudo tee /etc/systemd/system/cyberWatch-worker@.service >/dev/null
       sudo systemctl daemon-reload
       
+      log "Enabling and starting ${worker_count} worker instances"
       for i in $(seq 1 $worker_count); do
-        log "Enabling and starting worker instance ${i}"
         sudo systemctl enable "cyberWatch-worker@${i}.service"
         sudo systemctl restart "cyberWatch-worker@${i}.service" || sudo systemctl start "cyberWatch-worker@${i}.service"
       done

@@ -1,22 +1,19 @@
 [Unit]
 Description=CyberWatch Measurement Worker (Instance %i)
-After=network.target redis.service postgresql.service
-Wants=redis.service postgresql.service
+After=network.target redis-server.service postgresql.service
+Wants=redis-server.service postgresql.service
 
 [Service]
 Type=simple
-User=cyberwatch
-Group=cyberwatch
-WorkingDirectory=/opt/cyberwatch
+WorkingDirectory=@ROOT_DIR@
 
 # Environment variables
-Environment="CYBERWATCH_PG_DSN=postgresql://cyberwatch:cyberwatch@localhost/cyberwatch"
-Environment="CYBERWATCH_REDIS_URL=redis://localhost:6379/0"
 Environment="WORKER_ID=%i"
 Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=-/etc/cyberwatch/cyberwatch.env
 
 # Execution
-ExecStart=/usr/bin/python3 -m cyberWatch.workers.worker
+ExecStart=@ROOT_DIR@/.venv/bin/python -m cyberWatch.workers.worker
 
 # Restart policy
 Restart=always
@@ -29,12 +26,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=cyberwatch-worker-%i
 
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/cyberwatch/logs
+
 
 [Install]
 WantedBy=multi-user.target
