@@ -38,7 +38,14 @@ async def get_setting(pool: Pool, key: str) -> Optional[Dict[str, Any]]:
         )
         if row is None:
             return None
-        return json.loads(row["value"])
+        value = row["value"]
+        # asyncpg typically decodes JSONB into Python objects already.
+        # Older rows or alternate codecs may yield a JSON string.
+        if isinstance(value, (dict, list)):
+            return value  # type: ignore[return-value]
+        if isinstance(value, (str, bytes, bytearray)):
+            return json.loads(value)
+        return None
 
 
 async def set_setting(pool: Pool, key: str, value: Dict[str, Any]) -> None:
@@ -48,7 +55,7 @@ async def set_setting(pool: Pool, key: str, value: Dict[str, Any]) -> None:
         await conn.execute(
             """
             INSERT INTO settings (key, value, updated_at)
-            VALUES ($1, $2, NOW())
+            VALUES ($1, $2::jsonb, NOW())
             ON CONFLICT (key) DO UPDATE
             SET value = EXCLUDED.value, updated_at = NOW()
             """,

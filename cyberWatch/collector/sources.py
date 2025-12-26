@@ -71,7 +71,7 @@ class PiholeApiSource:
             return self._api_version
         
         client = await self._client()
-        base_url = self.cfg.base_url.rstrip("/")
+        base_url = self._base_url_for_v6()
         
         # Try v6 auth endpoint first
         try:
@@ -106,7 +106,7 @@ class PiholeApiSource:
             return self._session_id
         
         client = await self._client()
-        base_url = self.cfg.base_url.rstrip("/")
+        base_url = self._base_url_for_v6()
         
         try:
             auth_url = f"{base_url}/api/auth"
@@ -132,7 +132,7 @@ class PiholeApiSource:
             return []
         
         client = await self._client()
-        base_url = self.cfg.base_url.rstrip("/")
+        base_url = self._base_url_for_v6()
         queries_url = f"{base_url}/api/queries"
         headers = {"sid": sid}
         
@@ -200,13 +200,7 @@ class PiholeApiSource:
     async def _fetch_v5(self) -> List[DNSQuery]:
         """Fetch queries using Pi-hole v5 API."""
         client = await self._client()
-        base_url = self.cfg.base_url.rstrip("/")
-        
-        # Ensure we use the correct v5 endpoint
-        if "/admin/api.php" not in base_url:
-            api_url = f"{base_url}/admin/api.php"
-        else:
-            api_url = base_url
+        api_url = self._v5_api_url()
         
         params = {"getAllQueries": "1", "auth": self.cfg.api_token}
         
@@ -260,7 +254,7 @@ class PiholeApiSource:
         """Close the HTTP session and logout from v6 if needed."""
         if self._session_id and self.session and not self.session.closed:
             try:
-                base_url = self.cfg.base_url.rstrip("/")
+                base_url = self._base_url_for_v6()
                 headers = {"sid": self._session_id}
                 await self.session.delete(f"{base_url}/api/auth", headers=headers)
                 logger.debug("Logged out from Pi-hole v6")
@@ -272,6 +266,23 @@ class PiholeApiSource:
             self.session = None
         
         self._session_id = None
+
+    def _strip_known_suffixes(self, url: str) -> str:
+        url = url.rstrip("/")
+        for suffix in ("/admin/api.php", "/api.php", "/admin"):
+            if url.endswith(suffix):
+                url = url[: -len(suffix)]
+                url = url.rstrip("/")
+        return url
+
+    def _base_url_for_v6(self) -> str:
+        # v6 endpoints are rooted at /api/* (no /admin prefix)
+        return self._strip_known_suffixes(self.cfg.base_url)
+
+    def _v5_api_url(self) -> str:
+        # v5 endpoint is /admin/api.php
+        base = self._strip_known_suffixes(self.cfg.base_url)
+        return f"{base}/admin/api.php"
 
 
 FTL_PATTERN = re.compile(

@@ -228,13 +228,50 @@ async def process_cycle(
 
 
 async def run_collector(config_path: str) -> None:
-    cfg = DNSCollectorConfig.load(config_path)
-    
+    try:
+        cfg = DNSCollectorConfig.load(config_path)
+    except FileNotFoundError as exc:
+        cfg = DNSCollectorConfig(enabled=False)
+        logger.error(
+            f"DNS config file not found: {config_path}",
+            exc_info=True,
+            extra={"outcome": "error", "error_type": type(exc).__name__, "config_path": config_path},
+        )
+        console.print(
+            f"[yellow]DNS config not found at {config_path}; starting disabled and waiting for Web UI settings.[/yellow]",
+            highlight=False,
+        )
+    except Exception as exc:
+        cfg = DNSCollectorConfig(enabled=False)
+        logger.error(
+            f"Failed to load DNS config: {config_path}",
+            exc_info=True,
+            extra={"outcome": "error", "error_type": type(exc).__name__, "config_path": config_path},
+        )
+        console.print(
+            f"[yellow]Invalid DNS config at {config_path}; starting disabled and waiting for Web UI settings.[/yellow]",
+            highlight=False,
+        )
+
+    async def _connect_pool_with_retry():
+        dsn = os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch")
+        backoff = 1
+        while True:
+            try:
+                pool_local = await create_pool(dsn)
+                await ensure_settings_table(pool_local)
+                return pool_local
+            except Exception as exc:
+                logger.error(
+                    f"Database connection failed (will retry in {backoff}s)",
+                    exc_info=True,
+                    extra={"outcome": "error", "error_type": type(exc).__name__, "dsn": dsn},
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+
     # Connect to database to check for UI-configured settings
-    pool = await create_pool(os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch"))
-    
-    # Ensure settings table exists
-    await ensure_settings_table(pool)
+    pool = await _connect_pool_with_retry()
     
     queue = TargetQueue()
     source: Optional[DNSSource] = None
@@ -280,8 +317,17 @@ async def run_collector(config_path: str) -> None:
             return cfg, new_source
         return cfg, None
     
-    # Initial load
-    cfg, source = await load_settings_and_source()
+    # Initial load (protect startup: failures here should not crash systemd service)
+    try:
+        cfg, source = await load_settings_and_source()
+    except Exception as exc:
+        logger.error(
+            "Failed to load initial settings/source; starting disabled",
+            exc_info=True,
+            extra={"outcome": "error", "error_type": type(exc).__name__},
+        )
+        cfg.enabled = False
+        source = None
     
     if not cfg.enabled:
         logger.warning("DNS collector disabled in config; waiting for configuration")
