@@ -73,6 +73,7 @@ async def get_neo4j_driver_with_retry(max_retries: int = 5, initial_delay: float
 
 async def main() -> None:
     pg_dsn = os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch")
+    redis_url = os.getenv("CYBERWATCH_REDIS_URL", "redis://localhost:6379/0")
     sleep_seconds = int(os.getenv("CYBERWATCH_ENRICH_INTERVAL", "10"))
 
     logger.info(
@@ -86,6 +87,7 @@ async def main() -> None:
     console.print("[cyan]Starting enrichment scheduler")
     
     pool = await pg.create_pool(pg_dsn)
+    queue = Queue(redis_url)
     
     # Initialize Neo4j with retry logic
     try:
@@ -101,8 +103,20 @@ async def main() -> None:
         console.print("[yellow]Check Neo4j service: sudo systemctl status neo4j")
         driver = None
     
+    # Track ASN expansion timing
+    last_asn_expansion = datetime.utcnow()
+    
     try:
         while True:
+            # Load settings
+            settings = await get_enrichment_settings(pool) or {
+                "poll_interval_seconds": 10,
+                "asn_expansion_enabled": True,
+                "asn_expansion_interval_minutes": 60,
+                "asn_min_neighbor_count": 5,
+                "asn_max_ips_per_asn": 10,
+            }
+            
             enriched = await enricher.run_once(pool)
             
             # Only attempt graph building if Neo4j is available
@@ -115,11 +129,37 @@ async def main() -> None:
                         f"Neo4j unavailable during graph building: {exc}",
                         extra={"outcome": "neo4j_unavailable"}
                     )
-                    # Continue enrichment even if graph building fails
             
-            if not enriched and not built:
+            # ASN expansion (periodic)
+            expanded = 0
+            if settings.get("asn_expansion_enabled", True):
+                minutes_since_expansion = (datetime.utcnow() - last_asn_expansion).total_seconds() / 60
+                expansion_interval = settings.get("asn_expansion_interval_minutes", 60)
+                
+                if minutes_since_expansion >= expansion_interval:
+                    logger.info("Running ASN expansion phase")
+                    console.print("[cyan]Running ASN expansion...")
+                    try:
+                        expander_config = AsnExpanderConfig(
+                            min_neighbor_count=settings.get("asn_min_neighbor_count", 5),
+                            max_ips_per_asn=settings.get("asn_max_ips_per_asn", 10),
+                            max_asns_per_run=20,
+                        )
+                        expanded = await expand_asns(pool, queue, expander_config)
+                        last_asn_expansion = datetime.utcnow()
+                        
+                        if expanded > 0:
+                            console.print(f"[green]ASN expansion: enqueued {expanded} IPs")
+                    except Exception as exc:
+                        logger.error(
+                            f"ASN expansion failed: {str(exc)}",
+                            exc_info=True,
+                            extra={"outcome": "error"}
+                        )
+            
+            if not enriched and not built and expanded == 0:
                 logger.debug("No work to do, sleeping")
-                await asyncio.sleep(sleep_seconds)
+                await asyncio.sleep(settings.get("poll_interval_seconds", sleep_seconds))
     except KeyboardInterrupt:
         logger.info("Enrichment scheduler interrupted", extra={"state": "interrupted"})
     except Exception as exc:
@@ -131,6 +171,7 @@ async def main() -> None:
     finally:
         logger.info("Enrichment scheduler shutting down", extra={"state": "shutdown"})
         await pool.close()
+        await queue.close()
         if driver is not None:
             await driver.close()
         logger.info("Enrichment scheduler stopped", extra={"state": "stopped"})

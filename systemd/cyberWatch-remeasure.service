@@ -1,0 +1,39 @@
+[Unit]
+Description=CyberWatch Periodic Remeasurement Scheduler
+After=network.target redis.service postgresql.service
+Wants=redis.service postgresql.service
+
+[Service]
+Type=simple
+User=cyberwatch
+Group=cyberwatch
+WorkingDirectory=/opt/cyberwatch
+
+# Environment variables
+Environment="CYBERWATCH_PG_DSN=postgresql://cyberwatch:cyberwatch@localhost/cyberwatch"
+Environment="CYBERWATCH_REDIS_URL=redis://localhost:6379/0"
+Environment="PYTHONUNBUFFERED=1"
+
+# Execution
+ExecStart=/usr/bin/python3 -m cyberWatch.scheduler.remeasure
+
+# Restart policy
+Restart=always
+RestartSec=60s
+StartLimitInterval=600s
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cyberwatch-remeasure
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/cyberwatch/logs
+
+[Install]
+WantedBy=multi-user.target

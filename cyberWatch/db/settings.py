@@ -166,3 +166,83 @@ async def clear_restart_request(pool: Pool) -> None:
     status.pop("restart_requested_at", None)
     status["last_restarted_at"] = datetime.utcnow().isoformat()
     await set_setting(pool, COLLECTOR_STATUS_KEY, status)
+
+
+# Worker settings
+WORKER_SETTINGS_KEY = "worker_settings"
+
+
+async def get_worker_settings(pool: Pool) -> Optional[Dict[str, Any]]:
+    """Get worker configuration settings."""
+    return await get_setting(pool, WORKER_SETTINGS_KEY)
+
+
+async def save_worker_settings(
+    pool: Pool,
+    *,
+    rate_limit_per_minute: int = 30,
+    max_concurrent_traceroutes: int = 5,
+    worker_count: int = 2,
+) -> None:
+    """Save worker configuration settings."""
+    await set_setting(pool, WORKER_SETTINGS_KEY, {
+        "rate_limit_per_minute": rate_limit_per_minute,
+        "max_concurrent_traceroutes": max_concurrent_traceroutes,
+        "worker_count": worker_count,
+    })
+
+
+# Enrichment settings
+ENRICHMENT_SETTINGS_KEY = "enrichment_settings"
+
+
+async def get_enrichment_settings(pool: Pool) -> Optional[Dict[str, Any]]:
+    """Get enrichment configuration settings."""
+    return await get_setting(pool, ENRICHMENT_SETTINGS_KEY)
+
+
+async def save_enrichment_settings(
+    pool: Pool,
+    *,
+    poll_interval_seconds: int = 10,
+    batch_size: int = 200,
+    asn_expansion_enabled: bool = True,
+    asn_expansion_interval_minutes: int = 60,
+    asn_min_neighbor_count: int = 5,
+    asn_max_ips_per_asn: int = 10,
+) -> None:
+    """Save enrichment configuration settings."""
+    await set_setting(pool, ENRICHMENT_SETTINGS_KEY, {
+        "poll_interval_seconds": poll_interval_seconds,
+        "batch_size": batch_size,
+        "asn_expansion_enabled": asn_expansion_enabled,
+        "asn_expansion_interval_minutes": asn_expansion_interval_minutes,
+        "asn_min_neighbor_count": asn_min_neighbor_count,
+        "asn_max_ips_per_asn": asn_max_ips_per_asn,
+    })
+
+
+# Remeasurement settings
+REMEASUREMENT_SETTINGS_KEY = "remeasurement_settings"
+
+
+async def get_remeasurement_settings(pool: Pool) -> Optional[Dict[str, Any]]:
+    """Get remeasurement configuration settings."""
+    return await get_setting(pool, REMEASUREMENT_SETTINGS_KEY)
+
+
+async def save_remeasurement_settings(
+    pool: Pool,
+    *,
+    enabled: bool = True,
+    interval_hours: int = 24,
+    batch_size: int = 100,
+    targets_per_run: int = 500,
+) -> None:
+    """Save remeasurement configuration settings."""
+    await set_setting(pool, REMEASUREMENT_SETTINGS_KEY, {
+        "enabled": enabled,
+        "interval_hours": interval_hours,
+        "batch_size": batch_size,
+        "targets_per_run": targets_per_run,
+    })

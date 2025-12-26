@@ -278,3 +278,255 @@ async def mark_measurement_graph_built(pool: Pool, measurement_id: int) -> None:
             measurement_id,
             datetime.utcnow(),
         )
+
+
+# ASN metadata operations
+async def upsert_asn(
+    pool: Pool,
+    asn: int,
+    *,
+    org_name: Optional[str] = None,
+    country_code: Optional[str] = None,
+    source: str = "cymru",
+    peeringdb_id: Optional[int] = None,
+    facility_count: Optional[int] = None,
+    peering_policy: Optional[str] = None,
+    traffic_levels: Optional[str] = None,
+    irr_as_set: Optional[str] = None,
+) -> None:
+    """Upsert ASN metadata, updating fields only if provided."""
+    logger.debug(
+        "Upserting ASN metadata",
+        extra={"asn": asn, "source": source, "action": "asn_upsert"}
+    )
+    
+    async with pool.acquire() as conn:
+        # Check if exists
+        existing = await conn.fetchrow("SELECT * FROM asns WHERE asn = $1", asn)
+        
+        if existing:
+            # Update only non-None fields
+            updates = []
+            values = []
+            param_num = 2  # $1 is asn
+            
+            if org_name is not None:
+                updates.append(f"org_name = ${param_num}")
+                values.append(org_name)
+                param_num += 1
+            
+            if country_code is not None:
+                updates.append(f"country_code = ${param_num}")
+                values.append(country_code)
+                param_num += 1
+            
+            if source is not None:
+                updates.append(f"source = ${param_num}")
+                values.append(source)
+                param_num += 1
+            
+            if peeringdb_id is not None:
+                updates.append(f"peeringdb_id = ${param_num}")
+                values.append(peeringdb_id)
+                param_num += 1
+            
+            if facility_count is not None:
+                updates.append(f"facility_count = ${param_num}")
+                values.append(facility_count)
+                param_num += 1
+            
+            if peering_policy is not None:
+                updates.append(f"peering_policy = ${param_num}")
+                values.append(peering_policy)
+                param_num += 1
+            
+            if traffic_levels is not None:
+                updates.append(f"traffic_levels = ${param_num}")
+                values.append(traffic_levels)
+                param_num += 1
+            
+            if irr_as_set is not None:
+                updates.append(f"irr_as_set = ${param_num}")
+                values.append(irr_as_set)
+                param_num += 1
+            
+            if updates:
+                updates.append("last_seen = NOW()")
+                updates.append("updated_at = NOW()")
+                
+                query = f"UPDATE asns SET {', '.join(updates)} WHERE asn = $1"
+                await conn.execute(query, asn, *values)
+        else:
+            # Insert new record
+            await conn.execute(
+                """
+                INSERT INTO asns (
+                    asn, org_name, country_code, source, peeringdb_id,
+                    facility_count, peering_policy, traffic_levels, irr_as_set
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                asn, org_name, country_code, source, peeringdb_id,
+                facility_count, peering_policy, traffic_levels, irr_as_set,
+            )
+        
+        logger.info(
+            "ASN metadata upserted",
+            extra={"asn": asn, "source": source, "outcome": "success"}
+        )
+
+
+async def get_asn(pool: Pool, asn: int) -> Optional[asyncpg.Record]:
+    """Retrieve ASN metadata by ASN number."""
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM asns WHERE asn = $1", asn)
+
+
+async def get_all_asns(
+    pool: Pool,
+    limit: int = 1000,
+    offset: int = 0,
+    order_by: str = "last_seen DESC"
+) -> List[asyncpg.Record]:
+    """Retrieve all ASNs with pagination."""
+    # Validate order_by to prevent SQL injection
+    valid_orders = [
+        "last_seen DESC", "last_seen ASC",
+        "prefix_count DESC", "prefix_count ASC",
+        "neighbor_count DESC", "neighbor_count ASC",
+        "asn ASC", "asn DESC",
+        "org_name ASC", "org_name DESC"
+    ]
+    if order_by not in valid_orders:
+        order_by = "last_seen DESC"
+    
+    async with pool.acquire() as conn:
+        query = f"SELECT * FROM asns ORDER BY {order_by} LIMIT $1 OFFSET $2"
+        return list(await conn.fetch(query, limit, offset))
+
+
+async def update_asn_stats(
+    pool: Pool,
+    asn: int,
+    *,
+    prefix_count: Optional[int] = None,
+    neighbor_count: Optional[int] = None,
+    total_measurements: Optional[int] = None,
+    avg_rtt_ms: Optional[float] = None,
+) -> None:
+    """Update ASN statistics."""
+    async with pool.acquire() as conn:
+        updates = []
+        values = []
+        param_num = 2  # $1 is asn
+        
+        if prefix_count is not None:
+            updates.append(f"prefix_count = ${param_num}")
+            values.append(prefix_count)
+            param_num += 1
+        
+        if neighbor_count is not None:
+            updates.append(f"neighbor_count = ${param_num}")
+            values.append(neighbor_count)
+            param_num += 1
+        
+        if total_measurements is not None:
+            updates.append(f"total_measurements = ${param_num}")
+            values.append(total_measurements)
+            param_num += 1
+        
+        if avg_rtt_ms is not None:
+            updates.append(f"avg_rtt_ms = ${param_num}")
+            values.append(avg_rtt_ms)
+            param_num += 1
+        
+        if updates:
+            updates.append("updated_at = NOW()")
+            query = f"UPDATE asns SET {', '.join(updates)} WHERE asn = $1"
+            await conn.execute(query, asn, *values)
+
+
+async def get_asns_needing_enrichment(pool: Pool, limit: int = 100) -> List[asyncpg.Record]:
+    """Get ASNs that haven't been enriched recently (older than 24 hours or never)."""
+    async with pool.acquire() as conn:
+        return list(
+            await conn.fetch(
+                """
+                SELECT asn, org_name, country_code, source
+                FROM asns
+                WHERE enrichment_completed_at IS NULL
+                   OR enrichment_completed_at < NOW() - INTERVAL '24 hours'
+                ORDER BY last_seen DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+        )
+
+
+async def mark_asn_enrichment_attempted(pool: Pool, asn: int) -> None:
+    """Mark ASN enrichment as attempted."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE asns SET enrichment_attempted_at = NOW() WHERE asn = $1",
+            asn,
+        )
+
+
+async def mark_asn_enrichment_completed(pool: Pool, asn: int) -> None:
+    """Mark ASN enrichment as completed."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE asns SET enrichment_completed_at = NOW() WHERE asn = $1",
+            asn,
+        )
+
+
+async def touch_target(
+    pool: Pool,
+    target_ip: str,
+    *,
+    source: str = "static",
+    seen_at: Optional[datetime] = None,
+) -> int:
+    """Touch a target (update last_seen or insert). Returns target ID."""
+    async with pool.acquire() as conn:
+        result = await conn.fetchrow(
+            """
+            INSERT INTO targets (target_ip, source, last_seen)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (target_ip) DO UPDATE
+            SET last_seen = COALESCE(EXCLUDED.last_seen, targets.last_seen)
+            RETURNING id
+            """,
+            target_ip,
+            source,
+            seen_at or datetime.utcnow(),
+        )
+        return int(result["id"])
+
+
+async def get_targets_for_remeasurement(
+    pool: Pool,
+    older_than_hours: int = 24,
+    limit: int = 100,
+) -> List[asyncpg.Record]:
+    """Get targets that haven't been measured recently."""
+    async with pool.acquire() as conn:
+        return list(
+            await conn.fetch(
+                """
+                SELECT t.id, t.target_ip, t.source, t.last_seen,
+                       MAX(m.completed_at) as last_measurement
+                FROM targets t
+                LEFT JOIN measurements m ON m.target_id = t.id
+                GROUP BY t.id
+                HAVING MAX(m.completed_at) IS NULL
+                    OR MAX(m.completed_at) < NOW() - ($1 || ' hours')::INTERVAL
+                ORDER BY MAX(m.completed_at) ASC NULLS FIRST
+                LIMIT $2
+                """,
+                str(older_than_hours),
+                limit,
+            )
+        )

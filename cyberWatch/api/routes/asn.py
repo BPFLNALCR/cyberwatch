@@ -65,59 +65,72 @@ async def _fetch_asn_from_external(asn: int) -> dict:
     }
 
 
-async def _get_asn_from_db(pool: asyncpg.Pool, asn: int) -> Optional[dict]:
-    """Get ASN info from PostgreSQL hop data if available."""
+async def _get_asn_from_postgres(pool: asyncpg.Pool, asn: int) -> Optional[dict]:
+    """Get ASN info from PostgreSQL asns table."""
     row = await pool.fetchrow(
-        """
-        SELECT asn, org_name, country_code as country
-        FROM hops
-        WHERE asn = $1 AND org_name IS NOT NULL
-        LIMIT 1
-        """,
+        "SELECT * FROM asns WHERE asn = $1",
         asn,
     )
     if row:
-        # Get unique neighbor ASNs from measurement paths
-        neighbors_rows = await pool.fetch(
-            """
-            SELECT DISTINCT h2.asn as neighbor_asn
-            FROM hops h1
-            JOIN hops h2 ON h1.measurement_id = h2.measurement_id
-            WHERE h1.asn = $1 AND h2.asn != $1 AND h2.asn IS NOT NULL
-            AND ABS(h1.hop_number - h2.hop_number) = 1
-            LIMIT 50
-            """,
-            asn,
-        )
-        neighbors = [r["neighbor_asn"] for r in neighbors_rows]
-        
-        # Get unique prefixes for this ASN
-        prefix_rows = await pool.fetch(
+        return {
+            "asn": row["asn"],
+            "org_name": row["org_name"],
+            "country": row["country_code"],
+            "prefix_count": row["prefix_count"],
+            "neighbor_count": row["neighbor_count"],
+            "facility_count": row["facility_count"],
+            "peering_policy": row["peering_policy"],
+            "traffic_levels": row["traffic_levels"],
+            "irr_as_set": row["irr_as_set"],
+            "total_measurements": row["total_measurements"],
+            "avg_rtt_ms": row["avg_rtt_ms"],
+            "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
+            "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+            "source": row["source"],
+            "neighbors": [],  # Will be populated from Neo4j if available
+            "prefixes": [],   # Will be populated from hops if needed
+        }
+    return None
+
+
+async def _get_asn_neighbors_from_neo4j(driver: AsyncDriver, asn: int) -> List[int]:
+    """Get neighbor ASNs from Neo4j graph."""
+    try:
+        query = """
+        MATCH (a:AS {asn: $asn})-[:ROUTE]-(n:AS)
+        RETURN DISTINCT n.asn AS neighbor_asn
+        ORDER BY neighbor_asn
+        """
+        async with driver.session() as session:
+            result = await session.run(query, asn=asn)
+            records = await result.list()
+            return [r["neighbor_asn"] for r in records if r["neighbor_asn"] is not None]
+    except Exception:
+        return []
+
+
+async def _get_asn_prefixes_from_hops(pool: asyncpg.Pool, asn: int, limit: int = 100) -> List[str]:
+    """Get prefixes for an ASN from hop data."""
+    try:
+        rows = await pool.fetch(
             """
             SELECT DISTINCT prefix
             FROM hops
             WHERE asn = $1 AND prefix IS NOT NULL
             ORDER BY prefix
-            LIMIT 100
+            LIMIT $2
             """,
             asn,
+            limit,
         )
-        prefixes = [str(r["prefix"]) for r in prefix_rows]
-        
-        return {
-            "asn": row["asn"],
-            "org_name": row["org_name"],
-            "country": row["country"],
-            "neighbors": neighbors,
-            "prefixes": prefixes,
-            "source": "postgresql",
-        }
-    return None
+        return [str(r["prefix"]) for r in rows]
+    except Exception:
+        return []
 
 
 @router.get("/{asn}")
 async def get_asn(asn: int, pool: asyncpg.Pool = Depends(pg_dep), request: Request = None):
-    """Get ASN information with graceful fallback when Neo4j is unavailable."""
+    """Get comprehensive ASN information from asns table with neighbors from Neo4j."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
     
     logger.info(
@@ -125,40 +138,42 @@ async def get_asn(asn: int, pool: asyncpg.Pool = Depends(pg_dep), request: Reque
         extra={"request_id": request_id, "user_input": {"asn": asn}}
     )
     
-    # Try Neo4j first
-    neo4j_data = None
+    # Primary source: PostgreSQL asns table
+    asn_data = await _get_asn_from_postgres(pool, asn)
+    
+    if asn_data:
+        # Enrich with neighbors from Neo4j if available
+        try:
+            from cyberWatch.api.utils.db import _driver
+            if _driver is not None:
+                neighbors = await _get_asn_neighbors_from_neo4j(_driver, asn)
+                asn_data["neighbors"] = neighbors
+                # Update neighbor count to match actual Neo4j data
+                if neighbors:
+                    asn_data["neighbor_count"] = len(neighbors)
+        except Exception as e:
+            logger.debug(f"Neo4j neighbor lookup failed: {e}")
+        
+        # Add prefixes from hops if not zero
+        if asn_data.get("prefix_count", 0) > 0:
+            prefixes = await _get_asn_prefixes_from_hops(pool, asn, limit=100)
+            asn_data["prefixes"] = prefixes
+        
+        return ok(asn_data)
+    
+    # Fallback 1: Try Neo4j graph data
     try:
         from cyberWatch.api.utils.db import _driver
         if _driver is not None:
             neo4j_data = await _fetch_asn_from_neo4j(_driver, asn)
             if neo4j_data:
-                # Enrich Neo4j data with prefixes from PostgreSQL
-                try:
-                    prefix_rows = await pool.fetch(
-                        """
-                        SELECT DISTINCT prefix
-                        FROM hops
-                        WHERE asn = $1 AND prefix IS NOT NULL
-                        ORDER BY prefix
-                        LIMIT 100
-                        """,
-                        asn,
-                    )
-                    neo4j_data["prefixes"] = [str(r["prefix"]) for r in prefix_rows]
-                except Exception:
-                    pass  # Keep empty prefixes if query fails
-                
+                # Enrich with prefixes
+                neo4j_data["prefixes"] = await _get_asn_prefixes_from_hops(pool, asn, limit=100)
                 return ok(neo4j_data)
     except Exception as e:
-        logger.debug(f"Neo4j lookup failed: {e}")
-        pass  # Neo4j unavailable, continue to fallback
+        logger.debug(f"Neo4j fallback failed: {e}")
     
-    # Try PostgreSQL data
-    pg_data = await _get_asn_from_db(pool, asn)
-    if pg_data:
-        return ok(pg_data)
-    
-    # Fallback to external sources
+    # Fallback 2: External sources (PeeringDB, etc.)
     external_data = await _fetch_asn_from_external(asn)
     return ok(external_data)
 

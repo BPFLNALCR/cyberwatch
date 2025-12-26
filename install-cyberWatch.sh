@@ -501,13 +501,117 @@ main() {
   fi
 
   install_dns_config
+  
+  # Initialize default settings in database
+  if prompt_yes_no "Initialize default settings (workers, enrichment, remeasurement)?" "y"; then
+    log "Initializing settings in database"
+    source "$VENV_DIR/bin/activate"
+    python3 - "$dsn" <<'PYEOF'
+import asyncio
+import sys
+from cyberWatch.db.pg import create_pool
+from cyberWatch.db.settings import (
+    save_worker_settings,
+    save_enrichment_settings,
+    save_remeasurement_settings,
+    ensure_settings_table,
+)
+
+async def init_settings(dsn):
+    pool = await create_pool(dsn)
+    try:
+        await ensure_settings_table(pool)
+        await save_worker_settings(
+            pool,
+            rate_limit_per_minute=30,
+            max_concurrent_traceroutes=5,
+            worker_count=2,
+        )
+        await save_enrichment_settings(
+            pool,
+            poll_interval_seconds=10,
+            batch_size=200,
+            asn_expansion_enabled=True,
+            asn_expansion_interval_minutes=60,
+            asn_min_neighbor_count=5,
+            asn_max_ips_per_asn=10,
+        )
+        await save_remeasurement_settings(
+            pool,
+            enabled=True,
+            interval_hours=24,
+            batch_size=100,
+            targets_per_run=500,
+        )
+        print("Settings initialized successfully")
+    finally:
+        await pool.close()
+
+asyncio.run(init_settings(sys.argv[1]))
+PYEOF
+  fi
+  
   log "Install complete. Activate venv with: source $VENV_DIR/bin/activate"
+  
+  # Install systemd services
   if [[ -d "$SYSTEMD_DIR" ]]; then
     install_service "cyberWatch-api.service" "$SYSTEMD_DIR/cyberWatch-api.service"
     install_service "cyberWatch-ui.service" "$SYSTEMD_DIR/cyberWatch-ui.service"
     install_service "cyberWatch-enrichment.service" "$SYSTEMD_DIR/cyberWatch-enrichment.service"
     install_service "cyberWatch-dns-collector.service" "$SYSTEMD_DIR/cyberWatch-dns-collector.service"
+    
+    # Install worker services (2 instances by default)
+    local worker_count=2
+    if [[ -f "$SYSTEMD_DIR/cyberWatch-worker@.service" ]]; then
+      log "Installing worker services (${worker_count} instances)"
+      sudo cp "$SYSTEMD_DIR/cyberWatch-worker@.service" /etc/systemd/system/
+      sudo systemctl daemon-reload
+      
+      for i in $(seq 1 $worker_count); do
+        log "Enabling and starting worker instance ${i}"
+        sudo systemctl enable "cyberWatch-worker@${i}.service"
+        sudo systemctl restart "cyberWatch-worker@${i}.service" || sudo systemctl start "cyberWatch-worker@${i}.service"
+      done
+    else
+      warn "Worker template service not found at $SYSTEMD_DIR/cyberWatch-worker@.service"
+    fi
+    
+    # Install remeasurement service
+    if [[ -f "$SYSTEMD_DIR/cyberWatch-remeasure.service" ]]; then
+      install_service "cyberWatch-remeasure.service" "$SYSTEMD_DIR/cyberWatch-remeasure.service"
+    else
+      warn "Remeasurement service not found at $SYSTEMD_DIR/cyberWatch-remeasure.service"
+    fi
   fi
+  
+  # Display service status summary
+  log ""
+  log "=== Installation Complete ==="
+  log ""
+  log "Services installed:"
+  for service in cyberWatch-api cyberWatch-ui cyberWatch-enrichment cyberWatch-dns-collector cyberWatch-worker@1 cyberWatch-worker@2 cyberWatch-remeasure; do
+    if systemctl is-active --quiet "${service}.service" 2>/dev/null; then
+      log "  ✓ ${service}: RUNNING"
+    else
+      log "  ✗ ${service}: STOPPED (may need manual start)"
+    fi
+  done
+  log ""
+  log "Configuration:"
+  log "  Environment: /etc/cyberwatch/cyberwatch.env"
+  log "  DNS Config: /etc/cyberwatch/dns.yaml"
+  log "  Venv: $VENV_DIR"
+  log ""
+  log "Useful Commands:"
+  log "  View logs: sudo journalctl -u 'cyberWatch-*' -f"
+  log "  View workers: sudo journalctl -u 'cyberWatch-worker@*' -f"
+  log "  Check queue: redis-cli LLEN cyberwatch:targets"
+  log "  Restart services: sudo systemctl restart 'cyberWatch-*'"
+  log ""
+  log "Web Interfaces:"
+  log "  API: http://localhost:8000"
+  log "  UI: http://localhost:8080"
+  log ""
 }
 
 main "$@"

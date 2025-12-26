@@ -13,6 +13,7 @@ from typing import List, Optional, Sequence, Tuple
 from pydantic import BaseModel, IPvAnyAddress
 
 from cyberWatch.db.pg import create_pool, insert_measurement
+from cyberWatch.db.settings import get_worker_settings
 from cyberWatch.scheduler.queue import TargetQueue, TargetTask
 from cyberWatch.logging_config import get_logger
 
@@ -265,12 +266,37 @@ async def run_traceroute(target: str) -> MeasurementResult:
 
 
 class Worker:
-    """Measurement worker loop."""
+    """Measurement worker loop with rate limiting."""
 
     def __init__(self) -> None:
         self.queue = TargetQueue()
         dsn = os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch")
         self.pg_dsn = dsn
+        self.rate_limit_per_minute = 30  # Default
+        self.max_concurrent = 5  # Default
+        self.semaphore: Optional[asyncio.Semaphore] = None
+        self.rate_limiter_tokens: List[float] = []  # Token bucket timestamps
+
+    async def _apply_rate_limit(self) -> None:
+        """Token bucket rate limiter."""
+        now = time.time()
+        # Remove tokens older than 60 seconds
+        self.rate_limiter_tokens = [t for t in self.rate_limiter_tokens if now - t < 60]
+        
+        if len(self.rate_limiter_tokens) >= self.rate_limit_per_minute:
+            # Wait until oldest token expires
+            oldest = min(self.rate_limiter_tokens)
+            wait_time = 60 - (now - oldest) + 0.1  # Add small buffer
+            logger.debug(
+                f"Rate limit reached, waiting {wait_time:.2f}s",
+                extra={"tokens_used": len(self.rate_limiter_tokens), "limit": self.rate_limit_per_minute}
+            )
+            await asyncio.sleep(wait_time)
+            # Re-check after waiting
+            await self._apply_rate_limit()
+        else:
+            # Add token
+            self.rate_limiter_tokens.append(now)
 
     async def run(self) -> None:
         logger.info(
@@ -278,17 +304,34 @@ class Worker:
             extra={
                 "component": "worker",
                 "state": "starting",
-                "pg_dsn": self.pg_dsn.split("@")[-1] if "@" in self.pg_dsn else "local",  # Sanitize DSN
+                "pg_dsn": self.pg_dsn.split("@")[-1] if "@" in self.pg_dsn else "local",
             }
         )
         
         pool = await create_pool(self.pg_dsn)
+        
+        # Load settings from database
+        settings = await get_worker_settings(pool)
+        if settings:
+            self.rate_limit_per_minute = settings.get("rate_limit_per_minute", 30)
+            self.max_concurrent = settings.get("max_concurrent_traceroutes", 5)
+            logger.info(
+                "Worker settings loaded",
+                extra={
+                    "rate_limit": self.rate_limit_per_minute,
+                    "max_concurrent": self.max_concurrent,
+                }
+            )
+        
+        self.semaphore = asyncio.Semaphore(self.max_concurrent)
         
         logger.info(
             "Worker ready",
             extra={
                 "component": "worker",
                 "state": "ready",
+                "rate_limit_per_minute": self.rate_limit_per_minute,
+                "max_concurrent": self.max_concurrent,
             }
         )
         
@@ -298,7 +341,12 @@ class Worker:
                 if task is None:
                     logger.debug("No tasks in queue, waiting...")
                     continue
-                await self.handle_task(pool, task)
+                
+                # Apply rate limiting before processing
+                await self._apply_rate_limit()
+                
+                # Process task with concurrency control
+                asyncio.create_task(self._handle_task_with_semaphore(pool, task))
         except KeyboardInterrupt:
             logger.info("Worker interrupted by user", extra={"state": "interrupted"})
         except Exception as exc:
@@ -312,6 +360,11 @@ class Worker:
             await pool.close()
             await self.queue.close()
             logger.info("Worker stopped", extra={"state": "stopped"})
+
+    async def _handle_task_with_semaphore(self, pool, task: TargetTask) -> None:
+        """Handle task with semaphore to limit concurrency."""
+        async with self.semaphore:
+            await self.handle_task(pool, task)
 
     async def handle_task(self, pool, task: TargetTask) -> None:
         task_id = str(uuid.uuid4())

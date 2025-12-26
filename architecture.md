@@ -55,11 +55,13 @@ Top-level components:
 
 1. **DNS Target Collector (optional)**
 2. **Target Queue / Scheduler**
-3. **Measurement Workers**
-4. **Enrichment & Topology Builder**
-5. **Data Stores**
-6. **APIs & Web UI**
-7. **Monitoring & Security**
+3. **Measurement Worker Pool**
+4. **Enrichment & Topology Builder (Multi-source)**
+5. **ASN Discovery & Expansion**
+6. **Remeasurement Scheduler**
+7. **Data Stores (PostgreSQL + Neo4j)**
+8. **APIs & Web UI**
+9. **Monitoring & Security**
 
 Conceptual diagram:
 
@@ -78,7 +80,7 @@ Conceptual diagram:
                      v
           +----------+-----------+
           |  Target Queue        |
-          |  (Redis / similar)   |
+          |  (Redis)             |
           +----------+-----------+
                      |
          +-----------+-----------+
@@ -86,13 +88,16 @@ Conceptual diagram:
          v                       v
 +--------+---------+   +---------+--------+
 | Measurement      |   | Enrichment /     |
-| Workers          |   | Topology Builder |
+| Worker Pool      |   | Topology Builder |
+| (2-4 workers)    |   | (Multi-source)   |
+| Rate-limited     |   |                  |
 +--------+---------+   +---------+--------+
          |                       |
          v                       v
    +-----+-------+         +-----+------+
    |  PostgreSQL |         |   Neo4j    |
-   |  (metrics)  |         |(AS graph)  |
+   | (metrics +  |<------->|(AS graph)  |
+   |  ASN table) |         |            |
    +-----+-------+         +-----+------+
          |                       |
          v                       v
@@ -101,6 +106,15 @@ Conceptual diagram:
    | Dashboards  |         | Looking-   |
    +-------------+         |   Glass    |
                            +------------+
+         ^                       ^
+         |                       |
+         +----------+------------+
+                    |
+          +---------+-----------+
+          | Remeasurement       |
+          | Scheduler           |
+          | (periodic refresh)  |
+          +---------------------+
 ```
 
 ---
@@ -111,14 +125,16 @@ Conceptual diagram:
 
 The core system runs on a **single Debian VM**, which hosts:
 
-* Python services (collector, workers, enrichment).
+* Python services (collector, workers, enrichment, remeasurement scheduler).
 * Redis (queue).
-* PostgreSQL (measurement DB).
+* PostgreSQL (measurement DB + ASN metadata table).
 * Neo4j (graph DB).
 * Web UI + API (Python web framework).
 * Grafana (dashboards).
 
 This VM can be created on Proxmox or any other hypervisor. Vertical scaling is achieved by giving more CPU/RAM to the VM.
+
+**Worker Scaling:** The measurement worker pool is horizontally scalable using systemd template units (`cyberWatch-worker@.service`). Start with 2 workers, scale to 4+ as needed by enabling additional instances (`cyberWatch-worker@3.service`, etc.).
 
 ---
 
@@ -171,13 +187,13 @@ Implementation:
 * Preferred: **Redis** (simple and robust for queues).
 * Python layer for scheduling policies (workers pull tasks via Redis lists/streams).
 
-### 5.3 Measurement Workers
+### 5.3 Measurement Worker Pool
 
-**Purpose:** perform actual network measurements.
+**Purpose:** perform actual network measurements with rate limiting and concurrency control.
 
 Responsibilities:
 
-* Pull tasks from the Target Queue.
+* Pull tasks from the Target Queue (Redis `cyberwatch:targets` list).
 * Run measurement tools:
 
   * `scamper` for traceroute / ping.
@@ -191,12 +207,26 @@ Responsibilities:
 
   * PostgreSQL (raw + summarized).
   * An internal channel for enrichment.
+* **Rate limiting:** Token bucket algorithm prevents network abuse (default: 30 traceroutes/min per worker).
+* **Concurrency control:** Max concurrent traceroutes per worker (default: 5) prevents resource exhaustion.
 
 Implementation:
 
-* Python async workers (e.g. `asyncio`).
-* Invoke system tools via subprocess, or integrate with libraries if available.
-* Configuration-driven: intervals, protocols, destination sets.
+* Python async workers using `asyncio`.
+* Scalable via systemd template units (`cyberWatch-worker@1.service`, `cyberWatch-worker@2.service`, etc.).
+* **Settings loaded from PostgreSQL** (`worker_settings` key):
+  * `rate_limit_per_minute`: Max traceroutes per minute per worker
+  * `max_concurrent_traceroutes`: Max parallel traceroutes per worker
+  * `worker_count`: Number of worker instances
+* Token bucket with 60-second rolling window for rate limiting.
+* Semaphore for concurrency control.
+
+**Scaling Example:**
+```bash
+# Start 4 workers instead of 2
+sudo systemctl start cyberWatch-worker@3.service cyberWatch-worker@4.service
+sudo systemctl enable cyberWatch-worker@3.service cyberWatch-worker@4.service
+```
 
 ### 5.4 Enrichment & Topology Builder
 
@@ -230,29 +260,44 @@ Implementation:
 
 ### 5.5 Data Stores
 
-#### 5.5.1 PostgreSQL
+#### 5.7.1 PostgreSQL
 
 Used for:
 
 * Raw probe results (per measurement, per hop).
+* **ASN metadata table** (`asns`):
+
+  * Comprehensive ASN information from all enrichment sources
+  * Fields: asn, org_name, country_code, prefix_count, neighbor_count
+  * PeeringDB data: peeringdb_id, facility_count, peering_policy, traffic_levels, irr_as_set
+  * Statistics: total_measurements, avg_rtt_ms
+  * Timestamps: first_seen, last_seen, last_enriched, last_enrichment_attempt
+  * Indexes on asn, org_name, country_code, neighbor_count, last_enriched
 * Derived metrics:
 
   * Per target: latency distribution, hop count, success/failure rates.
-  * Per ASN: aggregate performance numbers.
+  * Per ASN: aggregate performance numbers (stored in `asns` table).
 * Metadata:
 
   * Task definitions.
-  * Target sets.
+  * Target sets with measurement timestamps.
   * Configuration snapshots.
+* **Settings table** for runtime configuration:
+
+  * worker_settings: rate limits, concurrency, worker count
+  * enrichment_settings: ASN expansion parameters
+  * remeasurement_settings: remeasurement intervals and batch sizes
 
 Schema (high-level):
 
-* `targets` – known targets (IP, ASN, labels, first/last seen).
-* `measurements` – one row per measurement run.
-* `hops` – hop-level data for each measurement.
+* `targets` – known targets (IP, ASN, labels, first/last seen, last_measurement_at).
+* `measurements` – one row per measurement run with enrichment/graph status.
+* `hops` – hop-level data for each measurement with ASN/org/country from enrichment.
+* `asns` – **dedicated ASN metadata table** with comprehensive enrichment data.
 * `asn_stats` – aggregated metrics per ASN per time window.
+* `settings` – runtime configuration (JSONB key-value store).
 
-#### 5.5.2 Neo4j
+#### 5.7.2 Neo4j
 
 Used for:
 
@@ -267,9 +312,9 @@ Used for:
   * Neighbors of AS.
   * Changes in adjacency over time.
 
-### 5.6 APIs & Web UI
+### 5.8 APIs & Web UI
 
-#### 5.6.1 Backend API
+#### 5.8.1 Backend API
 
 Responsibilities:
 
@@ -285,7 +330,7 @@ Implementation:
 * Python web framework (FastAPI or similar).
 * Direct DB access (PostgreSQL, Neo4j).
 
-#### 5.6.2 Looking Glass Web UI
+#### 5.8.2 Looking Glass Web UI
 
 Responsibilities:
 
@@ -303,7 +348,7 @@ Implementation:
 * Simple SPA or server-rendered pages.
 * Talks to backend API.
 
-#### 5.6.3 Grafana Dashboards
+#### 5.8.3 Grafana Dashboards
 
 Responsibilities:
 
@@ -354,7 +399,7 @@ Even if implemented in later phases:
 
 ## 7. Implementation Phases
 
-**Phase 0 – Skeleton**
+**Phase 0 – Skeleton** ✅ Completed
 
 * Debian VM baseline.
 * PostgreSQL + Redis installed.
@@ -364,27 +409,33 @@ Even if implemented in later phases:
   * Runs traceroute.
   * Stores results in PostgreSQL.
 
-**Phase 1 – Queue & Workers**
+**Phase 1 – Queue & Workers** ✅ Completed
 
 * Introduce Target Queue with Redis.
 * Build stable worker process with basic scheduling.
+* **Worker pool** with rate limiting and concurrency control.
+* Systemd template units for horizontal scaling.
 
-**Phase 2 – Enrichment**
+**Phase 2 – Enrichment** ✅ Completed
 
-* IP → ASN mapping.
+* IP → ASN mapping via **multi-source enrichment** (Team Cymru, PeeringDB, RIPE RIS, ip-api, ipinfo).
+* **Dedicated ASN metadata table** with comprehensive fields.
 * Store ASN info and basic aggregations.
+* **ASN discovery and expansion** via prefix sampling.
+* **Remeasurement scheduler** for keeping data fresh.
 
-**Phase 3 – Graph & UI**
+**Phase 3 – Graph & UI** ✅ Completed
 
 * Neo4j graph builder.
 * Basic API + web UI + Grafana.
+* **Enhanced ASN API** with full enrichment data.
 
-**Phase 4 – DNS Integration & Privacy**
+**Phase 4 – DNS Integration & Privacy** 🔄 In Progress
 
 * DNS Target Collector.
 * Anonymization, hashing, and policy controls.
 
-**Phase 5 – Hardening**
+**Phase 5 – Hardening** ⏳ Planned
 
 * Network isolation, TLS, authentication, and logging policies.
 

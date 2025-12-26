@@ -33,46 +33,64 @@ DNS activity from a local resolver (e.g., Pi-hole) can be turned into measuremen
 **Active Measurement**
 - traceroute/scamper with hop-by-hop parsing; MTR endpoint for ad-hoc runs when `mtr` is installed.
 - Targets pulled from Redis queue; results inserted into PostgreSQL with hop RTTs and raw output.
+- **Multi-worker architecture**: Scalable traceroute processing with 2-4 parallel workers (configurable).
+- **Rate limiting**: Token bucket rate limiter prevents network abuse (default: 30 traceroutes/min per worker).
+- **Automatic remeasurement**: Periodic re-measurement of targets keeps data fresh (default: 24-hour interval).
 
 **Enrichment & Topology**
-- IP→ASN lookups via Team Cymru WHOIS/DNS with PeeringDB org metadata caching.
+- **Multi-source ASN enrichment**: Gathers data from Team Cymru WHOIS, PeeringDB, RIPE RIS, ip-api.com, and ipinfo.io for maximum coverage.
+- **Dedicated ASN table**: Stores comprehensive metadata including organization names, countries, neighbor counts, peering policies, facility counts, and statistics.
+- **Automatic ASN discovery**: Intelligently expands topology by sampling IPs from announced prefixes of interesting ASNs.
 - Neo4j AS graph builder that merges observed AS adjacencies with edge weights (observed_count, min/max RTT, last_seen).
+- **Enhanced API responses**: ASN endpoints return rich metadata from all sources with neighbor lists from Neo4j graph.
 
 **DNS Integration**
 - Optional Pi-hole API or log tail ingestion; filters for suffixes (`.local`, `.lan`), qtypes (PTR), client allow/deny, max domain length.
-- Domains resolved to A/AAAA (configurable max IPs) and enqueued as measurement targets; stored in `dns_queries` and `dns_targets` tables.
+- Domains resolved to A/AAAA (configurable max IPs) and **automatically enqueued for traceroute measurement**.
+- Stored in `dns_queries` and `dns_targets` tables with full analytics.
 
 **APIs & Looking Glass**
-- FastAPI service with endpoints for traceroute/MTR, measurements, hops, target enqueue/list, ASN detail, graph neighbors/path, DNS analytics.
-- UI pages for traceroute, ASN lookup, and graph neighbors using the same API.
+- FastAPI service with endpoints for traceroute/MTR, measurements, hops, target enqueue/list, ASN detail (with full enrichment), graph neighbors/path, DNS analytics.
+- UI pages for traceroute, ASN lookup (showing rich metadata), and graph neighbors using the same API.
 
 **Dashboards**
-- Grafana JSON dashboards for latency, hopcount, and ASN performance sourced from PostgreSQL (`measurements`, `hops`, `targets`).
+- Grafana JSON dashboards for latency, hopcount, and ASN performance sourced from PostgreSQL (`measurements`, `hops`, `targets`, `asns`).
 
 ## Architecture Overview
-Core runtime is a Debian VM running Python services plus Redis, PostgreSQL, and Neo4j. Systemd units manage API, UI, enrichment loop, and the DNS collector. Data flow:
+Core runtime is a Debian VM running Python services plus Redis, PostgreSQL, and Neo4j. Systemd units manage API, UI, enrichment loop, DNS collector, measurement workers, and remeasurement scheduler. Data flow:
 
 ```
-DNS logs/API → DNS collector → Redis target queue → measurement workers → PostgreSQL
-                                ↓                                 ↓
-                            targets table                  enrichment (ASN/PeeringDB)
-                                ↓                                 ↓
-                          enqueue new tasks              Neo4j AS graph builder
-                                ↓                                 ↓
-                      API / UI / Grafana dashboards consume data
+DNS logs/API → DNS collector → Redis target queue → measurement workers (2-4) → PostgreSQL
+                                ↓                          ↓                          ↓
+                            targets table          ASN enrichment              hops/measurements
+                                ↓                  (5+ sources)                        ↓
+                      Worker rate limiting        ASN metadata table        Neo4j graph builder
+                         (30/min default)             (asns)                         ↓
+                                ↓                          ↓                    AS topology
+                    Remeasurement scheduler    ASN IP discovery                     ↓
+                       (24hr interval)         (prefix sampling)        API / UI / Grafana dashboards
 ```
+
+**Key Components:**
+- **DNS Collector**: Captures PiHole queries, resolves IPs, enqueues to Redis
+- **Worker Pool** (2-4 instances): Dequeues targets, runs traceroutes with rate limiting and concurrency control
+- **Enrichment Service**: Polls unenriched hops, enriches from 5+ sources (Team Cymru, PeeringDB, RIPE RIS, ip-api, ipinfo), populates ASN table
+- **ASN Expander**: Periodically discovers IPs within interesting ASNs by sampling from announced prefixes
+- **Graph Builder**: Converts enriched measurements into Neo4j AS topology with ROUTE edges
+- **Remeasurement Scheduler**: Re-enqueues stale targets for fresh measurements
 
 See [architecture.md](architecture.md) for the full design and phased goals.
 
 ## Data Model & What cyberWatch Shows You
-- **Measurements**: `target`, tool used, timestamps, success, raw output.
-- **Hops**: hop number, IP, RTT ms, ASN, prefix, org, country.
+- **Measurements**: `target`, tool used, timestamps, success, raw output, enrichment status, graph build status.
+- **Hops**: hop number, IP, RTT ms, ASN, prefix, org, country (enriched from multiple sources).
+- **ASNs**: Dedicated table with comprehensive metadata - org name, country, neighbor count, prefix count, PeeringDB data (facility count, peering policy, traffic levels, IRR AS-SET), measurement statistics, timestamps.
 - **DNS-derived targets**: domains/IPs with first/last seen, query counts, last client/qtype.
 - **AS graph edges** (Neo4j): AS nodes with org/country, `ROUTE` edges holding observed_count, min/max RTT, last_seen.
 
 How it appears:
-- API: `/measurements/latest?target=1.1.1.1`, `/measurements/hops/{id}`, `/traceroute/run`, `/asn/{asn}`, `/graph/path?src_asn=64512&dst_asn=15169`, `/dns/top-domains`, `/dns/top-asns`.
-- UI: traceroute form shows JSON hops; ASN view shows org/country plus neighbors; graph view lists neighbor edges.
+- API: `/measurements/latest?target=1.1.1.1`, `/measurements/hops/{id}`, `/traceroute/run`, `/asn/{asn}` (returns full enrichment), `/graph/path?src_asn=64512&dst_asn=15169`, `/dns/top-domains`, `/dns/top-asns`.
+- UI: traceroute form shows JSON hops; ASN view shows org/country/neighbors/facilities/peering policy; graph view lists neighbor edges.
 - Grafana: latency time series (mean, P95), hopcount distribution and over time, RTT by ASN and observed edge counts.
 
 ## Installation (Debian)
@@ -91,10 +109,17 @@ cd cyberwatch
 - Installs apt packages: python3, python3-venv, python3-pip, redis-server, postgresql, postgresql-client, libpq-dev, neo4j, traceroute, scamper, mtr-tiny, curl, jq.
 - Creates `.venv` and installs [cyberWatch/requirements.txt](cyberWatch/requirements.txt).
 - Optionally applies PostgreSQL schemas [cyberWatch/db/schema.sql](cyberWatch/db/schema.sql) and [cyberWatch/db/dns_schema.sql](cyberWatch/db/dns_schema.sql) to DSN `CYBERWATCH_PG_DSN` (default `postgresql://postgres:postgres@localhost:5432/cyberWatch`).
+- **Initializes default settings** for workers (rate limits, concurrency), enrichment (ASN expansion), and remeasurement (intervals) in the database.
 - Configures Neo4j with secure password, creates graph constraints and indexes.
 - Persists runtime configuration for systemd services to `/etc/cyberwatch/cyberwatch.env` (including `CYBERWATCH_PG_DSN`, Redis URL, and Neo4j credentials).
 - Installs DNS config to `/etc/cyberwatch/dns.yaml` from [config/cyberwatch_dns.example.yaml](config/cyberwatch_dns.example.yaml) if absent.
-- Installs/enables systemd units: [systemd/cyberWatch-api.service](systemd/cyberWatch-api.service), [systemd/cyberWatch-ui.service](systemd/cyberWatch-ui.service), [systemd/cyberWatch-enrichment.service](systemd/cyberWatch-enrichment.service), [systemd/cyberWatch-dns-collector.service](systemd/cyberWatch-dns-collector.service).
+- Installs/enables systemd units:
+  - [systemd/cyberWatch-api.service](systemd/cyberWatch-api.service) - REST API
+  - [systemd/cyberWatch-ui.service](systemd/cyberWatch-ui.service) - Web UI
+  - [systemd/cyberWatch-enrichment.service](systemd/cyberWatch-enrichment.service) - ASN enrichment and graph building
+  - [systemd/cyberWatch-dns-collector.service](systemd/cyberWatch-dns-collector.service) - DNS query ingestion
+  - **[systemd/cyberWatch-worker@.service](systemd/cyberWatch-worker@.service)** - Measurement workers (2 instances: `@1`, `@2`)
+  - **[systemd/cyberWatch-remeasure.service](systemd/cyberWatch-remeasure.service)** - Periodic remeasurement scheduler
 
 ## Configuration
 - DNS collector config lives at `/etc/cyberwatch/dns.yaml` (installed from [config/cyberwatch_dns.example.yaml](config/cyberwatch_dns.example.yaml)). Key fields:
@@ -107,6 +132,40 @@ cd cyberwatch
   - `CYBERWATCH_PG_DSN`, `CYBERWATCH_REDIS_URL` (queue), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` for API/enrichment/collector.
   - `CYBERWATCH_API_BASE` for the UI to reach the API.
   - `CYBERWATCH_DNS_CONFIG` to point the collector to a non-default config path.
+- **Runtime settings stored in PostgreSQL** (configured during installation, adjustable via SQL or API):
+  - **Worker settings** (`worker_settings` key):
+    - `rate_limit_per_minute`: Max traceroutes per minute per worker (default: 30)
+    - `max_concurrent_traceroutes`: Max parallel traceroutes per worker (default: 5)
+    - `worker_count`: Number of worker instances (default: 2)
+  - **Enrichment settings** (`enrichment_settings` key):
+    - `poll_interval_seconds`: Enrichment polling frequency (default: 10)
+    - `batch_size`: Hops to process per batch (default: 200)
+    - `asn_expansion_enabled`: Enable automatic ASN IP discovery (default: true)
+    - `asn_expansion_interval_minutes`: How often to expand ASNs (default: 60)
+    - `asn_min_neighbor_count`: Only expand ASNs with this many neighbors (default: 5)
+    - `asn_max_ips_per_asn`: Max IPs to sample per ASN (default: 10)
+  - **Remeasurement settings** (`remeasurement_settings` key):
+    - `enabled`: Enable periodic remeasurement (default: true)
+    - `interval_hours`: How often to remeasure targets (default: 24)
+    - `batch_size`: Targets to process per batch (default: 100)
+    - `targets_per_run`: Max targets to remeasure per cycle (default: 500)
+
+**Adjusting Settings:**
+```sql
+-- Increase worker rate limits
+UPDATE settings 
+SET value = '{"rate_limit_per_minute": 60, "max_concurrent_traceroutes": 10}'::jsonb 
+WHERE key = 'worker_settings';
+
+-- Adjust ASN expansion
+UPDATE settings 
+SET value = '{"asn_expansion_enabled": true, "asn_expansion_interval_minutes": 30, "asn_max_ips_per_asn": 20}'::jsonb 
+WHERE key = 'enrichment_settings';
+
+-- Then restart affected services
+sudo systemctl restart 'cyberWatch-worker@*'
+sudo systemctl restart cyberWatch-enrichment
+```
 
 ### Logging Configuration
 cyberWatch includes comprehensive structured logging in JSONL format for all components. Logging is **enabled by default** and can be configured via environment variables:
@@ -173,8 +232,40 @@ Sensitive data (passwords, API tokens) is automatically redacted from logs. You'
 **Systemd (installed by the script)**
 - API: `sudo systemctl status|start|stop cyberWatch-api.service` (FastAPI on port 8000).
 - UI: `sudo systemctl status|start|stop cyberWatch-ui.service` (Uvicorn on port 8080).
-- Enrichment loop: `sudo systemctl status|start|stop cyberWatch-enrichment.service` (ASN enrichment + graph builder).
+- Enrichment loop: `sudo systemctl status|start|stop cyberWatch-enrichment.service` (ASN enrichment + graph builder + ASN expander).
 - DNS collector (optional): `sudo systemctl status|start|stop cyberWatch-dns-collector.service`.
+- **Workers**: `sudo systemctl status|start|stop 'cyberWatch-worker@*.service'` (measurement workers @1, @2, etc.).
+- **Remeasurement**: `sudo systemctl status|start|stop cyberWatch-remeasure.service` (periodic target remeasurement).
+
+**Scaling Workers:**
+```bash
+# Start additional worker instances
+sudo systemctl start cyberWatch-worker@3.service
+sudo systemctl enable cyberWatch-worker@3.service
+
+# Check all workers
+systemctl list-units 'cyberWatch-worker@*'
+
+# View worker logs
+sudo journalctl -u 'cyberWatch-worker@*' -f
+```
+
+**Monitoring:**
+```bash
+# Check Redis queue depth
+redis-cli LLEN cyberwatch:targets
+
+# View all logs
+sudo journalctl -u 'cyberWatch-*' -f
+
+# Check database stats
+psql -U cyberwatch -d cyberwatch -c "
+SELECT 
+  (SELECT COUNT(*) FROM measurements) as measurements,
+  (SELECT COUNT(*) FROM asns) as asns,
+  (SELECT COUNT(*) FROM hops WHERE asn IS NOT NULL) as enriched_hops
+"
+```
 
 **Manual/dev mode**
 ```bash
@@ -190,6 +281,8 @@ python -m cyberWatch.enrichment.run_enrichment
 python -m cyberWatch.collector.dns_collector --config /etc/cyberwatch/dns.yaml
 # Run a worker manually
 python -m cyberWatch.workers.worker
+# Run remeasurement scheduler
+python -m cyberWatch.scheduler.remeasure
 ```
 
 ## Using the API and UI
@@ -248,9 +341,20 @@ What it does:
 ## Roadmap / Future Work
 From [architecture.md](architecture.md):
 - Privacy hardening for DNS-derived targets (hashing/anonymization), TLS, and access controls.
-- Richer scheduling/rate limiting and expanded probe set (MTR/ping integration beyond ad-hoc).
-- Broader metadata ingestion (BGP/IXP datasets) to deepen the AS graph.
+- Richer scheduling/rate limiting (✓ implemented) and expanded probe set (MTR/ping integration beyond ad-hoc).
+- Broader metadata ingestion (BGP/IXP datasets, RouteViews, RIS) to deepen the AS graph.
 - Monitoring/security hardening (network isolation, auth for UI/Grafana, encrypted channels).
+- AS relationship classification (peer, transit, customer).
+- Geographic diversity and latency anomaly detection.
+
+**Recently Completed:**
+- ✅ Multi-worker architecture with scalable traceroute processing
+- ✅ Rate limiting and concurrency control for workers
+- ✅ Multi-source ASN enrichment (Team Cymru, PeeringDB, RIPE RIS, ip-api, ipinfo)
+- ✅ Dedicated ASN metadata table with comprehensive fields
+- ✅ Automatic ASN IP discovery via prefix sampling
+- ✅ Periodic remeasurement of stale targets
+- ✅ Enhanced API responses with full ASN enrichment data
 
 ## License
 License: TBD (no LICENSE file present).
