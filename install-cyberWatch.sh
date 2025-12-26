@@ -299,9 +299,9 @@ configure_neo4j() {
   log "Setting Neo4j password"
   
   # Since we cleared auth files, Neo4j starts with default password 'neo4j'
-  # Change it using ALTER USER command
+  # Change it using ALTER USER command (pipe to avoid interactive prompts)
   if command -v cypher-shell >/dev/null 2>&1; then
-    if cypher-shell -u neo4j -p neo4j "ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO '${neo4j_password}';" >/dev/null 2>&1; then
+    if echo "ALTER CURRENT USER SET PASSWORD FROM 'neo4j' TO '${neo4j_password}';" | cypher-shell -u neo4j -p neo4j --non-interactive >/dev/null 2>&1; then
       log "Neo4j password set successfully"
     else
       warn "Failed to set Neo4j password"
@@ -330,7 +330,7 @@ configure_neo4j() {
     fi
     
     # Verify password works
-    if cypher-shell -u neo4j -p "${neo4j_password}" "RETURN 1;" >/dev/null 2>&1; then
+    if echo "RETURN 1;" | cypher-shell -u neo4j -p "${neo4j_password}" --non-interactive >/dev/null 2>&1; then
       log "Neo4j authentication verified"
     else
       warn "Neo4j password verification failed. Check $ENV_FILE_DEST for stored password."
