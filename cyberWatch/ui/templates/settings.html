@@ -101,15 +101,21 @@
       <p id="collector-hint" class="cw-muted small"></p>
     </div>
     <div class="cw-tile">
-      <p class="cw-muted">Configuration Source</p>
-      <div class="cw-tile-value">Database</div>
-      <p class="cw-muted small">Settings saved via this page</p>
+      <p class="cw-muted">Last Heartbeat</p>
+      <div id="collector-heartbeat" class="cw-tile-value">—</div>
+      <p class="cw-muted small">Updated each polling cycle</p>
     </div>
   </div>
 
-  <div class="cw-alert cw-alert-warning" style="margin-top: 1rem;">
-    <strong>Note:</strong> After saving settings, restart the DNS collector service for changes to take effect:<br>
-    <code>sudo systemctl restart cyberWatch-dns-collector</code>
+  <div class="cw-input-row" style="margin-top: 1rem;">
+    <button type="button" id="restart-btn" class="cw-btn-secondary">
+      <span id="restart-btn-text">Reload Settings</span>
+    </button>
+    <span id="restart-status" class="cw-muted" style="align-self: center;"></span>
+  </div>
+
+  <div class="cw-alert cw-alert-info" style="margin-top: 1rem;">
+    <strong>Tip:</strong> Click "Reload Settings" after saving to apply changes without restarting the service manually.
   </div>
 </section>
 {% endblock %}
@@ -249,10 +255,6 @@
       showMessage(piholeStatus, "Please enter a Pi-hole URL", "error");
       return;
     }
-    if (!piholeToken.value && !piholeToken.placeholder.includes("saved")) {
-      showMessage(piholeStatus, "Please enter an API token", "error");
-      return;
-    }
 
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving...";
@@ -261,29 +263,26 @@
     try {
       const payload = {
         base_url: piholeUrl.value,
-        api_token: piholeToken.value,
+        api_token: piholeToken.value || null,  // Send null if empty, backend will use existing
         enabled: piholeEnabled.checked,
         poll_interval_seconds: parseInt(piholeInterval.value) || 30,
         verify_ssl: piholeVerifySsl.checked,
       };
 
-      // If no new token provided but one is saved, we need to handle this
-      // For now, require token on save (user can re-enter it)
-      if (!payload.api_token) {
-        showMessage(piholeStatus, "Please re-enter your API token to save", "error");
-        saveBtn.disabled = false;
-        saveBtn.textContent = "Save Settings";
-        return;
-      }
-
-      await fetchJson("/settings/pihole", {
+      const result = await fetchJson("/settings/pihole", {
         method: "POST",
         body: JSON.stringify(payload),
       });
 
-      showMessage(piholeStatus, "Settings saved! Restart collector service.", "success");
-      piholeToken.value = "";
-      piholeToken.placeholder = "••••••••••••• (saved)";
+      if (result.success === false) {
+        showMessage(piholeStatus, result.message || "Failed to save", "error");
+      } else {
+        showMessage(piholeStatus, "Settings saved! Click 'Reload Settings' to apply.", "success");
+        if (piholeToken.value) {
+          piholeToken.value = "";
+          piholeToken.placeholder = "••••••••••••• (saved)";
+        }
+      }
     } catch (err) {
       showMessage(piholeStatus, err.message || "Failed to save settings", "error");
     } finally {
@@ -292,15 +291,46 @@
     }
   });
 
+  // Restart collector
+  const restartBtn = document.getElementById("restart-btn");
+  const restartBtnText = document.getElementById("restart-btn-text");
+  const restartStatus = document.getElementById("restart-status");
+  const collectorHeartbeat = document.getElementById("collector-heartbeat");
+
+  restartBtn.addEventListener("click", async () => {
+    restartBtn.disabled = true;
+    restartBtnText.textContent = "Requesting...";
+    restartStatus.textContent = "";
+
+    try {
+      const result = await fetchJson("/settings/pihole/restart", {
+        method: "POST",
+      });
+
+      restartStatus.textContent = result.message || "Restart requested";
+      restartStatus.className = "cw-muted";
+      
+      // Refresh status after a short delay
+      setTimeout(checkCollectorStatus, 2000);
+    } catch (err) {
+      restartStatus.textContent = err.message || "Failed to request restart";
+      restartStatus.className = "cw-muted";
+    } finally {
+      restartBtn.disabled = false;
+      restartBtnText.textContent = "Reload Settings";
+    }
+  });
+
   // Check collector status
   async function checkCollectorStatus() {
     try {
-      const settings = await fetchJson("/settings/pihole");
-      if (settings.configured && settings.enabled) {
-        collectorStatus.textContent = "Configured";
+      const status = await fetchJson("/settings/pihole/status");
+      
+      if (status.configured && status.enabled) {
+        collectorStatus.textContent = "Active";
         collectorStatus.className = "cw-pill cw-pill-ok";
-        collectorHint.textContent = "Settings are saved. Collector should be running.";
-      } else if (settings.configured && !settings.enabled) {
+        collectorHint.textContent = "Collector is configured and enabled.";
+      } else if (status.configured && !status.enabled) {
         collectorStatus.textContent = "Disabled";
         collectorStatus.className = "cw-pill cw-pill-bad";
         collectorHint.textContent = "Enable collection to start gathering DNS data.";
@@ -309,15 +339,41 @@
         collectorStatus.className = "cw-pill cw-pill-bad";
         collectorHint.textContent = "Enter Pi-hole settings above to configure.";
       }
+
+      // Show heartbeat
+      if (status.last_collector_heartbeat) {
+        const hbDate = new Date(status.last_collector_heartbeat);
+        const now = new Date();
+        const diffMs = now - hbDate;
+        const diffSec = Math.floor(diffMs / 1000);
+        
+        if (diffSec < 60) {
+          collectorHeartbeat.textContent = `${diffSec}s ago`;
+          collectorHeartbeat.className = "cw-pill cw-pill-ok";
+        } else if (diffSec < 300) {
+          collectorHeartbeat.textContent = `${Math.floor(diffSec / 60)}m ago`;
+          collectorHeartbeat.className = "cw-pill cw-pill-ok";
+        } else {
+          collectorHeartbeat.textContent = `${Math.floor(diffSec / 60)}m ago`;
+          collectorHeartbeat.className = "cw-pill cw-pill-bad";
+        }
+      } else {
+        collectorHeartbeat.textContent = "No data";
+        collectorHeartbeat.className = "";
+      }
     } catch (err) {
       collectorStatus.textContent = "Unknown";
       collectorStatus.className = "";
       collectorHint.textContent = "Could not check status.";
+      collectorHeartbeat.textContent = "—";
     }
   }
 
   // Initialize
   loadSettings();
   checkCollectorStatus();
+  
+  // Auto-refresh collector status every 10 seconds
+  setInterval(checkCollectorStatus, 10000);
 </script>
 {% endblock %}

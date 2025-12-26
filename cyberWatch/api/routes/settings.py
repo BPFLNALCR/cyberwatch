@@ -1,6 +1,7 @@
 """Settings management API endpoints."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 import aiohttp
@@ -10,7 +11,12 @@ from pydantic import BaseModel, Field
 
 from cyberWatch.api.models import ok, err
 from cyberWatch.api.utils.db import pg_dep
-from cyberWatch.db.settings import get_pihole_settings, save_pihole_settings
+from cyberWatch.db.settings import (
+    get_pihole_settings,
+    save_pihole_settings,
+    request_collector_restart,
+    get_collector_status,
+)
 from cyberWatch.logging_config import get_logger
 
 logger = get_logger("api")
@@ -20,7 +26,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 class PiholeSettingsRequest(BaseModel):
     """Request body for Pi-hole settings."""
     base_url: str = Field(..., description="Pi-hole base URL (e.g., http://192.168.1.10)")
-    api_token: str = Field(..., description="Pi-hole API password/token")
+    api_token: Optional[str] = Field(default=None, description="Pi-hole API password/token (optional if already saved)")
     enabled: bool = Field(default=True, description="Enable DNS collection from Pi-hole")
     poll_interval_seconds: int = Field(default=30, ge=5, le=300, description="Poll interval in seconds")
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates (disable for self-signed certs)")
@@ -69,6 +75,26 @@ async def get_pihole(
     })
 
 
+@router.get("/pihole/status")
+async def get_collector_status_endpoint(
+    pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
+):
+    """Get DNS collector status including last restart time."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    status = await get_collector_status(pool)
+    settings = await get_pihole_settings(pool)
+    
+    return ok({
+        "configured": settings is not None and bool(settings.get("base_url")),
+        "enabled": settings.get("enabled", False) if settings else False,
+        "last_restart_requested": status.get("restart_requested_at") if status else None,
+        "last_collector_heartbeat": status.get("last_heartbeat") if status else None,
+        "collector_running": status.get("running", False) if status else False,
+    })
+
+
 @router.post("/pihole")
 async def save_pihole(
     body: PiholeSettingsRequest,
@@ -77,6 +103,25 @@ async def save_pihole(
 ):
     """Save Pi-hole connection settings."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    # Get existing settings to preserve password if not provided
+    existing = await get_pihole_settings(pool)
+    
+    # Determine the API token to use
+    api_token = body.api_token
+    if not api_token or api_token.strip() == "":
+        # Use existing token if available
+        if existing and existing.get("api_token"):
+            api_token = existing["api_token"]
+            logger.info(
+                "Using existing API token",
+                extra={"request_id": request_id, "action": "pihole_save"}
+            )
+        else:
+            return ok({
+                "success": False,
+                "message": "API token is required for initial configuration.",
+            })
     
     logger.info(
         "Saving Pi-hole settings",
@@ -92,7 +137,7 @@ async def save_pihole(
     await save_pihole_settings(
         pool,
         base_url=body.base_url,
-        api_token=body.api_token,
+        api_token=api_token,
         enabled=body.enabled,
         poll_interval_seconds=body.poll_interval_seconds,
         verify_ssl=body.verify_ssl,
@@ -103,7 +148,28 @@ async def save_pihole(
         extra={"request_id": request_id, "outcome": "success"}
     )
     
-    return ok({"message": "Pi-hole settings saved successfully"})
+    return ok({"success": True, "message": "Pi-hole settings saved successfully"})
+
+
+@router.post("/pihole/restart")
+async def restart_collector(
+    pool: asyncpg.Pool = Depends(pg_dep),
+    request: Request = None,
+):
+    """Request the DNS collector to restart and reload settings."""
+    request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    
+    logger.info(
+        "Requesting DNS collector restart",
+        extra={"request_id": request_id, "action": "collector_restart"}
+    )
+    
+    await request_collector_restart(pool)
+    
+    return ok({
+        "success": True,
+        "message": "Restart requested. The collector will reload settings on its next cycle.",
+    })
 
 
 @router.post("/pihole/test")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from asyncpg import Pool
@@ -102,3 +103,59 @@ async def save_pihole_settings(
         "poll_interval_seconds": poll_interval_seconds,
         "verify_ssl": verify_ssl,
     })
+
+
+# Collector status and restart control
+COLLECTOR_STATUS_KEY = "collector_status"
+
+
+async def request_collector_restart(pool: Pool) -> None:
+    """Signal the collector to restart by updating the restart timestamp."""
+    await set_setting(pool, COLLECTOR_STATUS_KEY, {
+        "restart_requested_at": datetime.utcnow().isoformat(),
+    })
+    logger.info("Collector restart requested", extra={"action": "restart_request"})
+
+
+async def get_collector_status(pool: Pool) -> Optional[Dict[str, Any]]:
+    """Get collector status including restart requests and heartbeat."""
+    return await get_setting(pool, COLLECTOR_STATUS_KEY)
+
+
+async def update_collector_heartbeat(pool: Pool) -> None:
+    """Update the collector's heartbeat timestamp."""
+    status = await get_setting(pool, COLLECTOR_STATUS_KEY) or {}
+    status["last_heartbeat"] = datetime.utcnow().isoformat()
+    status["running"] = True
+    await set_setting(pool, COLLECTOR_STATUS_KEY, status)
+
+
+async def check_restart_requested(pool: Pool, last_check: Optional[datetime] = None) -> bool:
+    """Check if a restart has been requested since the last check.
+    
+    Args:
+        last_check: The datetime of the last restart check. If None, always returns False.
+    
+    Returns:
+        True if a restart was requested after last_check.
+    """
+    status = await get_setting(pool, COLLECTOR_STATUS_KEY)
+    if not status or "restart_requested_at" not in status:
+        return False
+    
+    if last_check is None:
+        return False
+    
+    try:
+        restart_time = datetime.fromisoformat(status["restart_requested_at"])
+        return restart_time > last_check
+    except (ValueError, TypeError):
+        return False
+
+
+async def clear_restart_request(pool: Pool) -> None:
+    """Clear the restart request after handling it."""
+    status = await get_setting(pool, COLLECTOR_STATUS_KEY) or {}
+    status.pop("restart_requested_at", None)
+    status["last_restarted_at"] = datetime.utcnow().isoformat()
+    await set_setting(pool, COLLECTOR_STATUS_KEY, status)

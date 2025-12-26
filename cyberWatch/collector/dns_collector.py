@@ -22,7 +22,13 @@ from cyberWatch.db.pg_dns import (
     touch_target,
     upsert_dns_targets,
 )
-from cyberWatch.db.settings import get_pihole_settings, ensure_settings_table
+from cyberWatch.db.settings import (
+    get_pihole_settings,
+    ensure_settings_table,
+    check_restart_requested,
+    clear_restart_request,
+    update_collector_heartbeat,
+)
 from cyberWatch.scheduler.queue import TargetQueue, TargetTask
 from cyberWatch.logging_config import get_logger
 
@@ -230,37 +236,56 @@ async def run_collector(config_path: str) -> None:
     # Ensure settings table exists
     await ensure_settings_table(pool)
     
-    # Check for database-stored Pi-hole settings (from UI)
-    db_settings = await get_pihole_settings(pool)
+    queue = TargetQueue()
+    source: Optional[DNSSource] = None
+    last_restart_check = datetime.utcnow()
     
-    if db_settings and db_settings.get("base_url"):
-        logger.info(
-            "Loading Pi-hole settings from database",
-            extra={"source": "database", "base_url": db_settings.get("base_url")}
-        )
-        # Override config with database settings
-        cfg.enabled = db_settings.get("enabled", True)
-        cfg.source = "pihole"
-        cfg.pihole = PiholeConfig(
-            base_url=db_settings.get("base_url", ""),
-            api_token=db_settings.get("api_token", ""),
-            poll_interval_seconds=db_settings.get("poll_interval_seconds", 30),
-            verify_ssl=db_settings.get("verify_ssl", True),
-        )
-    else:
-        logger.info(
-            "Using Pi-hole settings from config file",
-            extra={"source": "config_file", "config_path": config_path}
-        )
+    async def load_settings_and_source() -> tuple[DNSCollectorConfig, Optional[DNSSource]]:
+        """Load settings from database or config file and create source."""
+        nonlocal cfg, source
+        
+        # Check for database-stored Pi-hole settings (from UI)
+        db_settings = await get_pihole_settings(pool)
+        
+        if db_settings and db_settings.get("base_url"):
+            logger.info(
+                "Loading Pi-hole settings from database",
+                extra={"source": "database", "base_url": db_settings.get("base_url")}
+            )
+            # Override config with database settings
+            cfg.enabled = db_settings.get("enabled", True)
+            cfg.source = "pihole"
+            cfg.pihole = PiholeConfig(
+                base_url=db_settings.get("base_url", ""),
+                api_token=db_settings.get("api_token", ""),
+                poll_interval_seconds=db_settings.get("poll_interval_seconds", 30),
+                verify_ssl=db_settings.get("verify_ssl", True),
+            )
+        else:
+            logger.info(
+                "Using Pi-hole settings from config file",
+                extra={"source": "config_file", "config_path": config_path}
+            )
+        
+        # Close existing source if any
+        if source is not None and hasattr(source, "close"):
+            close_fn = getattr(source, "close")
+            if asyncio.iscoroutinefunction(close_fn):
+                await close_fn()
+            else:
+                close_fn()
+        
+        if cfg.enabled:
+            new_source = await build_source(cfg.source, cfg.pihole, cfg.logfile)
+            return cfg, new_source
+        return cfg, None
+    
+    # Initial load
+    cfg, source = await load_settings_and_source()
     
     if not cfg.enabled:
-        logger.warning("DNS collector disabled in config; exiting")
-        console.print("[yellow]DNS collector disabled in config; exiting.")
-        await pool.close()
-        return
-
-    source = await build_source(cfg.source, cfg.pihole, cfg.logfile)
-    queue = TargetQueue()
+        logger.warning("DNS collector disabled in config; waiting for configuration")
+        console.print("[yellow]DNS collector disabled; waiting for configuration via web UI.")
 
     logger.info(
         "DNS collector starting",
@@ -268,7 +293,7 @@ async def run_collector(config_path: str) -> None:
             "component": "collector",
             "state": "starting",
             "poll_interval": cfg.poll_interval,
-            "source_type": cfg.source,
+            "source_type": cfg.source if cfg.enabled else "none",
         }
     )
     console.print("[green]Starting cyberWatch DNS collector", highlight=False)
@@ -276,14 +301,32 @@ async def run_collector(config_path: str) -> None:
     try:
         while True:
             try:
-                # Re-check database settings each cycle to pick up changes
+                # Update heartbeat
+                await update_collector_heartbeat(pool)
+                
+                # Check for restart request
+                if await check_restart_requested(pool, last_restart_check):
+                    logger.info("Restart requested via web UI, reloading settings")
+                    console.print("[cyan]Restart requested, reloading settings...", highlight=False)
+                    await clear_restart_request(pool)
+                    cfg, source = await load_settings_and_source()
+                    last_restart_check = datetime.utcnow()
+                    console.print("[green]Settings reloaded successfully", highlight=False)
+                    continue
+                
+                # Re-check if enabled status changed
                 db_settings = await get_pihole_settings(pool)
                 if db_settings:
-                    cfg.enabled = db_settings.get("enabled", True)
-                    if not cfg.enabled:
-                        logger.info("DNS collector disabled via settings, pausing")
-                        await asyncio.sleep(cfg.poll_interval)
-                        continue
+                    new_enabled = db_settings.get("enabled", True)
+                    if new_enabled != cfg.enabled:
+                        logger.info(f"Enabled status changed to {new_enabled}, reloading")
+                        cfg, source = await load_settings_and_source()
+                        last_restart_check = datetime.utcnow()
+                
+                if not cfg.enabled or source is None:
+                    logger.debug("DNS collector disabled, waiting...")
+                    await asyncio.sleep(cfg.poll_interval)
+                    continue
                 
                 stats = await process_cycle(cfg, source, pool, queue)
                 console.log(
@@ -302,12 +345,12 @@ async def run_collector(config_path: str) -> None:
             await asyncio.sleep(cfg.poll_interval)
     finally:
         logger.info("DNS collector shutting down", extra={"state": "shutdown"})
-        if hasattr(source, "close"):
+        if source is not None and hasattr(source, "close"):
             close_fn = getattr(source, "close")
             if asyncio.iscoroutinefunction(close_fn):
-                await close_fn()  # type: ignore[arg-type]
+                await close_fn()
             else:
-                close_fn()  # type: ignore[misc]
+                close_fn()
         await queue.close()
         await pool.close()
         logger.info("DNS collector stopped", extra={"state": "stopped"})
