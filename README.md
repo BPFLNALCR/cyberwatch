@@ -91,6 +91,7 @@ cd cyberwatch
 - Installs apt packages: python3, python3-venv, python3-pip, redis-server, postgresql-client, libpq-dev, traceroute, scamper, mtr-tiny, curl, jq.
 - Creates `.venv` and installs [cyberWatch/requirements.txt](cyberWatch/requirements.txt).
 - Optionally applies PostgreSQL schemas [cyberWatch/db/schema.sql](cyberWatch/db/schema.sql) and [cyberWatch/db/dns_schema.sql](cyberWatch/db/dns_schema.sql) to DSN `CYBERWATCH_PG_DSN` (default `postgresql://postgres:postgres@localhost:5432/cyberWatch`).
+- Persists runtime configuration for systemd services to `/etc/cyberwatch/cyberwatch.env` (including `CYBERWATCH_PG_DSN`, Redis URL, and Neo4j credentials).
 - Installs DNS config to `/etc/cyberwatch/dns.yaml` from [config/cyberwatch_dns.example.yaml](config/cyberwatch_dns.example.yaml) if absent.
 - Installs/enables systemd units: [systemd/cyberWatch-api.service](systemd/cyberWatch-api.service), [systemd/cyberWatch-ui.service](systemd/cyberWatch-ui.service), [systemd/cyberWatch-enrichment.service](systemd/cyberWatch-enrichment.service), [systemd/cyberWatch-dns-collector.service](systemd/cyberWatch-dns-collector.service).
 
@@ -101,7 +102,7 @@ cd cyberwatch
   - `poll_interval_seconds`: per-source polling cadence.
   - `filters`: suffix ignore list (`.local`, `.lan`), qtypes to drop (e.g., `PTR`), clients to ignore, `max_domain_length`.
   - `dns_resolution`: enable/disable resolution, timeout, `max_ips_per_domain`.
-- Core environment variables (defaults in systemd units):
+- Core environment variables (loaded by systemd from `/etc/cyberwatch/cyberwatch.env`):
   - `CYBERWATCH_PG_DSN`, `CYBERWATCH_REDIS_URL` (queue), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` for API/enrichment/collector.
   - `CYBERWATCH_API_BASE` for the UI to reach the API.
   - `CYBERWATCH_DNS_CONFIG` to point the collector to a non-default config path.
