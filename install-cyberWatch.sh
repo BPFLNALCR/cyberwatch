@@ -323,13 +323,14 @@ configure_neo4j() {
   # Apply schema constraints/indexes
   if command -v cypher-shell >/dev/null 2>&1; then
     log "Creating Neo4j constraints and indexes"
-    cypher-shell -u neo4j -p "${neo4j_password}" 2>/dev/null <<'CYPHER' || {
-      warn "Failed to create constraints/indexes. They can be created later via Neo4j Browser."
-    }
+    if ! cypher-shell -u neo4j -p "${neo4j_password}" 2>/dev/null <<'CYPHER'
 CREATE CONSTRAINT asn_unique IF NOT EXISTS FOR (a:AS) REQUIRE a.asn IS UNIQUE;
 CREATE INDEX asn_org_name IF NOT EXISTS FOR (a:AS) ON (a.org_name);
 CREATE INDEX asn_country IF NOT EXISTS FOR (a:AS) ON (a.country);
 CYPHER
+    then
+      warn "Failed to create constraints/indexes. They can be created later via Neo4j Browser."
+    fi
   else
     warn "cypher-shell not found. Install Neo4j or run schema commands manually."
   fi
