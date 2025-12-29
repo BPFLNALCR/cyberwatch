@@ -245,9 +245,17 @@
       // Show debug info when no hops returned
       const rawOutput = data.raw_output || 'No raw output available';
       const debugInfo = rawOutput.length > 500 ? rawOutput.slice(0, 500) + '...' : rawOutput;
+      const debugMeta = [
+        `Tool: ${data.tool || 'unknown'}`,
+        `Success: ${data.success}`,
+        `Is Domain: ${isDomain}`,
+        `Resolved IP: ${resolvedIp || 'N/A'}`,
+        `Target sent: ${data.target || originalTarget}`,
+      ].join(' | ');
       pathCards.innerHTML = `
         <div class="cw-path-placeholder">
           <p>No hops returned for ${originalTarget}</p>
+          <p class="cw-muted small">${debugMeta}</p>
           <details class="cw-debug-details">
             <summary>Debug: Raw traceroute output</summary>
             <pre class="cw-debug-pre">${debugInfo.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>

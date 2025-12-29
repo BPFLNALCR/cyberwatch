@@ -450,6 +450,20 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
     if is_domain and resolved_ip:
         payload["resolved_ip"] = resolved_ip
     
+    # Debug: log what we're returning
+    logger.debug(
+        "Traceroute response payload",
+        extra={
+            "request_id": request_id,
+            "target": original_target,
+            "tool": result.tool,
+            "success": result.success,
+            "hop_count": len(result.hops),
+            "raw_output_length": len(result.raw_output) if result.raw_output else 0,
+            "raw_output_preview": (result.raw_output[:200] if result.raw_output else "EMPTY"),
+        }
+    )
+    
     return ok(payload)
 
 
