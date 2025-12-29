@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shutil
+import socket
 import time
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -23,6 +24,40 @@ router = APIRouter(prefix="/traceroute", tags=["traceroute"])
 
 def _http_error(code: int, message: str) -> None:
     raise HTTPException(status_code=code, detail={"status": "error", "message": message})
+
+
+def _is_ip_address(target: str) -> bool:
+    """Check if target is an IP address (IPv4 or IPv6)."""
+    try:
+        socket.inet_pton(socket.AF_INET, target)
+        return True
+    except socket.error:
+        pass
+    try:
+        socket.inet_pton(socket.AF_INET6, target)
+        return True
+    except socket.error:
+        pass
+    return False
+
+
+async def _resolve_domain(domain: str) -> Optional[str]:
+    """Resolve a domain to its first IP address."""
+    try:
+        loop = asyncio.get_event_loop()
+        # Use getaddrinfo which handles both IPv4 and IPv6
+        result = await loop.run_in_executor(
+            None,
+            lambda: socket.getaddrinfo(domain, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        )
+        if result:
+            # Return the first IP address found
+            return result[0][4][0]
+    except socket.gaierror as e:
+        logger.warning(f"Failed to resolve domain {domain}: {e}")
+    except Exception as e:
+        logger.error(f"DNS resolution error for {domain}: {e}")
+    return None
 
 
 async def _enrich_hop(ip: str) -> Dict[str, Any]:
@@ -269,11 +304,39 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
     """Run traceroute with enhanced analytics and save to database."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
     
+    original_target = req.target.strip()
+    is_domain = not _is_ip_address(original_target)
+    resolved_ip: Optional[str] = None
+    
+    # If target is a domain, resolve it first for database storage
+    if is_domain:
+        resolved_ip = await _resolve_domain(original_target)
+        if not resolved_ip:
+            logger.warning(
+                f"Failed to resolve domain: {original_target}",
+                extra={
+                    "request_id": request_id,
+                    "target": original_target,
+                    "outcome": "dns_error",
+                }
+            )
+            _http_error(status.HTTP_400_BAD_REQUEST, f"Could not resolve domain: {original_target}")
+        logger.info(
+            f"Resolved domain {original_target} to {resolved_ip}",
+            extra={
+                "request_id": request_id,
+                "domain": original_target,
+                "resolved_ip": resolved_ip,
+            }
+        )
+    
     logger.info(
         "Traceroute requested",
         extra={
             "request_id": request_id,
-            "user_input": {"target": req.target},
+            "user_input": {"target": original_target},
+            "is_domain": is_domain,
+            "resolved_ip": resolved_ip,
             "action": "traceroute_start",
         }
     )
@@ -281,12 +344,14 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
     started_at = datetime.utcnow()
     
     try:
-        result = await run_traceroute(req.target)
+        # Run traceroute with the original target (domain or IP)
+        # The traceroute tool itself will resolve domains
+        result = await run_traceroute(original_target)
         logger.info(
             "Traceroute execution completed",
             extra={
                 "request_id": request_id,
-                "target": req.target,
+                "target": original_target,
                 "tool": result.tool,
                 "success": result.success,
                 "hop_count": len(result.hops),
@@ -298,7 +363,7 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
             f"Traceroute tool unavailable: {str(exc)}",
             extra={
                 "request_id": request_id,
-                "target": req.target,
+                "target": original_target,
                 "outcome": "error",
                 "error_type": "tool_unavailable",
             }
@@ -310,7 +375,7 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
             exc_info=True,
             extra={
                 "request_id": request_id,
-                "target": req.target,
+                "target": original_target,
                 "outcome": "error",
                 "error_type": type(exc).__name__,
             }
@@ -331,11 +396,14 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
     seen = set()
     asn_hints = [x for x in asn_hints if not (x in seen or seen.add(x))]
     
+    # Use resolved IP for database storage (INET column requires IP, not domain)
+    target_for_db = resolved_ip if is_domain and resolved_ip else original_target
+    
     # Save to database
     try:
         measurement_id = await _save_measurement(
             pool,
-            req.target,
+            target_for_db,
             result.tool,
             started_at,
             completed_at,
@@ -350,7 +418,8 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
             extra={
                 "request_id": request_id,
                 "measurement_id": measurement_id,
-                "target": req.target,
+                "target": original_target,
+                "target_ip": target_for_db,
                 "hop_count": len(result.hops),
                 "enriched": len(enriched_hops) > 0,
             }
@@ -375,6 +444,11 @@ async def run(req: TracerouteRequest, pool: asyncpg.Pool = Depends(pg_dep), requ
     payload["analytics"] = analytics
     payload["timestamp"] = started_at.isoformat()
     payload["duration_ms"] = round((completed_at - started_at).total_seconds() * 1000, 2)
+    # Include domain resolution info
+    payload["original_target"] = original_target
+    payload["is_domain"] = is_domain
+    if is_domain and resolved_ip:
+        payload["resolved_ip"] = resolved_ip
     
     return ok(payload)
 

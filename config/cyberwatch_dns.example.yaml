@@ -22,12 +22,20 @@ logfile:
   format: "pihole_ftl"
   poll_interval_seconds: 10
 
+# Filter settings to reduce noise in DNS activity
+# NOTE: CyberWatch automatically ignores its own enrichment traffic:
+#   - *.origin.asn.cymru.com (Team Cymru ASN lookups)
+#   - *.peer.asn.cymru.com (Team Cymru peer lookups)
+#   - Reverse DNS lookups (*.in-addr.arpa, *.ip6.arpa)
+#   - IP-prefixed domains like 1.2.3.4.origin.asn.cymru.com
 filters:
   ignore_domains_suffix:
     - ".local"
     - ".lan"
   ignore_qtypes:
     - "PTR"
+  # To hide CyberWatch's own DNS requests, add its LAN IP here:
+  # e.g., if CyberWatch runs on 192.168.1.100, add it to ignore_clients
   ignore_clients: []
   max_domain_length: 255
 

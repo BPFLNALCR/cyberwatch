@@ -1349,6 +1349,14 @@ body {
 	max-width: 100%;
 }
 
+/* Resolved IP display on destination card */
+.cw-hop-resolved {
+	font-size: 0.7rem;
+	font-family: "Consolas", "Monaco", monospace;
+	color: #9fb3d1;
+	margin-bottom: 0.15rem;
+}
+
 /* Hop IP address */
 .cw-hop-ip {
 	font-size: 0.85rem;

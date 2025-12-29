@@ -213,11 +213,20 @@
       showMessage(statusBanner, `Path traced successfully: ${data.hops?.length || 0} hops`, 'success');
       
     } catch (err) {
-      showMessage(statusBanner, `Error: ${err.message}`, 'error');
+      // Handle error objects properly - could be string, Error, or object
+      let errMsg = 'Unknown error';
+      if (typeof err === 'string') {
+        errMsg = err;
+      } else if (err instanceof Error) {
+        errMsg = err.message;
+      } else if (err && typeof err === 'object') {
+        errMsg = err.message || err.detail || JSON.stringify(err);
+      }
+      showMessage(statusBanner, `Error: ${errMsg}`, 'error');
       pathCards.innerHTML = `
         <div class="cw-path-error">
           <p>Failed to trace path to ${target}</p>
-          <p class="cw-muted small">${err.message}</p>
+          <p class="cw-muted small">${errMsg}</p>
         </div>
       `;
     } finally {
@@ -229,6 +238,8 @@
   function renderPath(data, originalTarget) {
     const hops = data.hops || [];
     const analytics = data.analytics || {};
+    const isDomain = data.is_domain || false;
+    const resolvedIp = data.resolved_ip || null;
     
     if (hops.length === 0) {
       pathCards.innerHTML = `
@@ -271,7 +282,7 @@
       const isLast = index === hops.length - 1;
       const isTimeout = !hop.ip || hop.ip === '*';
       
-      html += renderHopCard(hop, index, isLast, isTimeout, originalTarget, data.target);
+      html += renderHopCard(hop, index, isLast, isTimeout, originalTarget, resolvedIp, isDomain);
       
       // Add connector unless it's the last hop
       if (!isLast) {
@@ -296,7 +307,7 @@
   }
   
   // Render individual hop card
-  function renderHopCard(hop, index, isLast, isTimeout, originalTarget, resolvedTarget) {
+  function renderHopCard(hop, index, isLast, isTimeout, originalTarget, resolvedIp, isDomain) {
     const hopNum = hop.hop || (index + 1);
     
     if (isTimeout) {
@@ -338,7 +349,7 @@
     
     // Special styling for last hop (destination)
     const cardClass = isLast ? 'cw-hop-card cw-hop-destination' : 'cw-hop-card';
-    const destinationInfo = isLast ? renderDestinationInfo(originalTarget, resolvedTarget) : '';
+    const destinationInfo = isLast ? renderDestinationInfo(originalTarget, resolvedIp, isDomain) : '';
     
     return `
       <div class="${cardClass}">
@@ -356,13 +367,11 @@
   }
   
   // Render destination info for last hop
-  function renderDestinationInfo(originalTarget, resolvedTarget) {
-    // Check if original target was a domain
-    const isDomain = !/^[\d.]+$/.test(originalTarget) && !/^[a-fA-F0-9:]+$/.test(originalTarget);
-    
+  function renderDestinationInfo(originalTarget, resolvedIp, isDomain) {
     if (isDomain) {
       return `
         <div class="cw-hop-domain">${originalTarget}</div>
+        ${resolvedIp ? `<div class="cw-hop-resolved">→ ${resolvedIp}</div>` : ''}
         <div class="cw-hop-label">Destination</div>
       `;
     }

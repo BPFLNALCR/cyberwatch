@@ -29,7 +29,7 @@ class HopModel(BaseModel):
 
 
 class MeasurementResult(BaseModel):
-    target: IPvAnyAddress
+    target: str  # Can be IP or domain
     timestamp: datetime
     tool: str
     success: bool
