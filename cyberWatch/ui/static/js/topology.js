@@ -17,14 +17,11 @@ const state = {
 
 // Force simulation parameters
 const physics = {
-  repulsion: 50000,       // Very strong repulsion
-  attraction: 0.003,      // Weak attraction
-  damping: 0.75,          // Lower damping = forces apply more
-  centerPull: 0.002,      // Gentle center pull
-  minDistance: 280,       // Minimum center-to-center distance
-  maxVelocity: 15,        // Allow faster movement for separation
   cardWidth: 200,         // Card dimensions
   cardHeight: 150,
+  padding: 30,            // Gap between cards
+  edgeLength: 300,        // Ideal edge length
+  damping: 0.85,
 };
 
 // DOM elements
@@ -161,10 +158,19 @@ async function loadTopology(params = {}) {
     
     if (data.nodes && data.nodes.length > 0) {
       console.log('Rendering', data.nodes.length, 'nodes and', (data.edges || []).length, 'edges');
-      state.nodes = data.nodes.map(node => ({
+      
+      // Calculate grid layout for initial positions to avoid overlap
+      const nodeCount = data.nodes.length;
+      const cols = Math.ceil(Math.sqrt(nodeCount));
+      const cellW = physics.cardWidth + physics.padding + 50;
+      const cellH = physics.cardHeight + physics.padding + 30;
+      const startX = 100;
+      const startY = 100;
+      
+      state.nodes = data.nodes.map((node, index) => ({
         ...node,
-        x: Math.random() * 800 + 200,
-        y: Math.random() * 600 + 150,
+        x: startX + (index % cols) * cellW,
+        y: startY + Math.floor(index / cols) * cellH,
         vx: 0,
         vy: 0,
       }));
@@ -490,72 +496,62 @@ function startSimulation() {
     if (iterations >= maxIterations) {
       clearInterval(simulationInterval);
       simulationInterval = null;
+      // Center the graph after simulation settles
+      resetTransform();
     }
   }, 16); // ~60fps
 }
 
 function applyForces() {
   const nodes = state.nodes;
-  const centerX = (window.innerWidth - 320) / 2;
-  const centerY = window.innerHeight / 2;
   
-  // Reset forces
-  nodes.forEach(node => {
-    node.fx = 0;
-    node.fy = 0;
-  });
+  // Required separation distances (card size + padding)
+  const minSepX = physics.cardWidth + physics.padding;
+  const minSepY = physics.cardHeight + physics.padding;
   
-  // Hard collision separation - cards must not overlap
-  // Card dimensions with padding
-  const cardW = physics.cardWidth + 40;  // 240px total width with gap
-  const cardH = physics.cardHeight + 30; // 180px total height with gap
-  
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const dx = nodes[j].x - nodes[i].x;
-      const dy = nodes[j].y - nodes[i].y;
-      const absDx = Math.abs(dx);
-      const absDy = Math.abs(dy);
-      
-      // Check if cards overlap (AABB collision)
-      const overlapX = cardW - absDx;
-      const overlapY = cardH - absDy;
-      
-      if (overlapX > 0 && overlapY > 0) {
-        // Cards are overlapping - apply strong separation force
-        // Push apart along the axis of least overlap
-        const pushX = overlapX / 2 + 10;
-        const pushY = overlapY / 2 + 10;
+  // Direct collision resolution - run multiple passes
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[j].x - nodes[i].x;
+        const dy = nodes[j].y - nodes[i].y;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
         
-        if (overlapX < overlapY) {
-          // Separate horizontally
-          const dirX = dx >= 0 ? 1 : -1;
-          nodes[i].fx -= dirX * pushX * 0.5;
-          nodes[j].fx += dirX * pushX * 0.5;
-        } else {
-          // Separate vertically
-          const dirY = dy >= 0 ? 1 : -1;
-          nodes[i].fy -= dirY * pushY * 0.5;
-          nodes[j].fy += dirY * pushY * 0.5;
+        // Check if cards overlap
+        const overlapX = minSepX - absDx;
+        const overlapY = minSepY - absDy;
+        
+        if (overlapX > 0 && overlapY > 0) {
+          // Cards are overlapping - directly adjust positions
+          // Choose axis with less overlap to minimize movement
+          if (overlapX < overlapY) {
+            // Push apart horizontally
+            const push = (overlapX / 2) + 5;
+            if (dx >= 0) {
+              nodes[i].x -= push;
+              nodes[j].x += push;
+            } else {
+              nodes[i].x += push;
+              nodes[j].x -= push;
+            }
+          } else {
+            // Push apart vertically
+            const push = (overlapY / 2) + 5;
+            if (dy >= 0) {
+              nodes[i].y -= push;
+              nodes[j].y += push;
+            } else {
+              nodes[i].y += push;
+              nodes[j].y -= push;
+            }
+          }
         }
-      }
-      
-      // General repulsion to maintain spacing
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      if (dist < physics.minDistance) {
-        const force = physics.repulsion / (dist * dist + 1);
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        
-        nodes[i].fx -= fx;
-        nodes[i].fy -= fy;
-        nodes[j].fx += fx;
-        nodes[j].fy += fy;
       }
     }
   }
   
-  // Attraction along edges - only when far enough apart
+  // Gentle edge attraction (pull connected nodes closer, but not overlapping)
   state.edges.forEach(edge => {
     const source = nodes.find(n => n.asn === edge.source);
     const target = nodes.find(n => n.asn === edge.target);
@@ -563,44 +559,27 @@ function applyForces() {
     if (source && target) {
       const dx = target.x - source.x;
       const dy = target.y - source.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const dist = Math.sqrt(dx * dx + dy * dy);
       
-      // Only attract if beyond safe distance (no overlap risk)
-      const safeDistance = Math.max(cardW, cardH) * 1.2;
-      if (dist > safeDistance) {
-        const force = (dist - safeDistance) * physics.attraction;
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
+      // Only attract if far apart and won't cause overlap
+      const minDist = Math.sqrt(minSepX * minSepX + minSepY * minSepY);
+      if (dist > physics.edgeLength) {
+        const pull = (dist - physics.edgeLength) * 0.02;
+        const nx = dx / dist;
+        const ny = dy / dist;
         
-        source.fx += fx;
-        source.fy += fy;
-        target.fx -= fx;
-        target.fy -= fy;
+        source.vx = (source.vx || 0) + nx * pull;
+        source.vy = (source.vy || 0) + ny * pull;
+        target.vx = (target.vx || 0) - nx * pull;
+        target.vy = (target.vy || 0) - ny * pull;
       }
     }
   });
   
-  // Center pull
+  // Apply velocity with damping
   nodes.forEach(node => {
-    const dx = centerX - node.x;
-    const dy = centerY - node.y;
-    node.fx += dx * physics.centerPull;
-    node.fy += dy * physics.centerPull;
-  });
-  
-  // Apply forces to velocity
-  nodes.forEach(node => {
-    node.vx = (node.vx + node.fx) * physics.damping;
-    node.vy = (node.vy + node.fy) * physics.damping;
-    
-    // Clamp velocity
-    const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-    if (speed > physics.maxVelocity) {
-      node.vx = (node.vx / speed) * physics.maxVelocity;
-      node.vy = (node.vy / speed) * physics.maxVelocity;
-    }
-    
-    // Update position
+    node.vx = (node.vx || 0) * physics.damping;
+    node.vy = (node.vy || 0) * physics.damping;
     node.x += node.vx;
     node.y += node.vy;
   });
@@ -652,7 +631,42 @@ function zoom(factor) {
 }
 
 function resetTransform() {
-  state.transform = { x: 0, y: 0, scale: 1 };
+  // Calculate bounding box of all nodes
+  if (state.nodes.length === 0) {
+    state.transform = { x: 0, y: 0, scale: 1 };
+    applyTransform();
+    return;
+  }
+  
+  const cardW = physics.cardWidth;
+  const cardH = physics.cardHeight;
+  
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  
+  state.nodes.forEach(node => {
+    minX = Math.min(minX, node.x);
+    maxX = Math.max(maxX, node.x + cardW);
+    minY = Math.min(minY, node.y);
+    maxY = Math.max(maxY, node.y + cardH);
+  });
+  
+  // Calculate center of bounding box
+  const boxCenterX = (minX + maxX) / 2;
+  const boxCenterY = (minY + maxY) / 2;
+  
+  // Calculate center of visible canvas area (accounting for sidebar)
+  const canvas = document.getElementById('topology-canvas');
+  const canvasCenterX = canvas.clientWidth / 2;
+  const canvasCenterY = canvas.clientHeight / 2;
+  
+  // Set transform to center the graph
+  state.transform = {
+    x: canvasCenterX - boxCenterX,
+    y: canvasCenterY - boxCenterY,
+    scale: 1
+  };
+  
   applyTransform();
 }
 
