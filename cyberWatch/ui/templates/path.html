@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+
+{% block bodyclass %} class="cw-path-page"{% endblock %}
+
+{% block content %}
+
+<div class="cw-path-layout">
+  <!-- Header with input and summary -->
+  <header class="cw-path-header">
+    <div class="cw-card">
+      <div class="cw-card-header">
+        <div>
+          <p class="cw-eyebrow">Network Path Visualization</p>
+          <h2 class="cw-h2">Trace Route to Destination</h2>
+        </div>
+        <div id="public-ip-badge" class="cw-public-ip-badge">
+          <span class="cw-pip-label">Your Public IP</span>
+          <span class="cw-pip-value" id="public-ip">Detecting...</span>
+        </div>
+      </div>
+      
+      <form id="path-form" class="cw-form">
+        <label for="target">Enter a domain or IP address to trace</label>
+        <div class="cw-input-row">
+          <input type="text" id="target" name="target" placeholder="example.com or 8.8.8.8" required>
+          <button type="submit">Trace Path</button>
+        </div>
+      </form>
+      
+      <div id="path-status" class="cw-banner"></div>
+      
+      <!-- Summary stats (hidden until results) -->
+      <div id="path-summary" class="cw-path-summary" style="display: none;">
+        <div class="cw-summary-item">
+          <span class="cw-summary-label">Total Hops</span>
+          <span class="cw-summary-value" id="summary-hops">0</span>
+        </div>
+        <div class="cw-summary-item">
+          <span class="cw-summary-label">Total RTT</span>
+          <span class="cw-summary-value" id="summary-rtt">0 ms</span>
+        </div>
+        <div class="cw-summary-item">
+          <span class="cw-summary-label">ASNs Traversed</span>
+          <span class="cw-summary-value" id="summary-asns">0</span>
+        </div>
+        <div class="cw-summary-item">
+          <span class="cw-summary-label">Countries</span>
+          <span class="cw-summary-value" id="summary-countries">0</span>
+        </div>
+        <div class="cw-summary-item">
+          <span class="cw-summary-label">Packet Loss</span>
+          <span class="cw-summary-value" id="summary-loss">0%</span>
+        </div>
+      </div>
+    </div>
+  </header>
+  
+  <!-- Main path visualization area -->
+  <main class="cw-path-main">
+    <!-- Loading overlay -->
+    <div id="path-loading" class="cw-loading-overlay hidden">
+      <div class="cw-loader"></div>
+      <p>Tracing path to destination...</p>
+    </div>
+    
+    <!-- Path container with horizontal scroll -->
+    <div id="path-container" class="cw-path-container">
+      <div id="path-cards" class="cw-path-cards">
+        <!-- Hop cards will be rendered here -->
+        <div class="cw-path-placeholder">
+          <p>Enter a destination above to visualize the network path</p>
+          <p class="cw-muted small">Each hop along the route will be displayed as a card from left to right</p>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Scroll hint -->
+    <div id="scroll-hint" class="cw-scroll-hint" style="display: none;">
+      <span>← Scroll to see all hops →</span>
+    </div>
+  </main>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  // State
+  let publicIp = null;
+  let currentTrace = null;
+  
+  // DOM elements
+  const form = document.getElementById('path-form');
+  const targetInput = document.getElementById('target');
+  const statusBanner = document.getElementById('path-status');
+  const loadingOverlay = document.getElementById('path-loading');
+  const pathCards = document.getElementById('path-cards');
+  const pathSummary = document.getElementById('path-summary');
+  const scrollHint = document.getElementById('scroll-hint');
+  const publicIpEl = document.getElementById('public-ip');
+  
+  // Detect public IP on page load
+  async function detectPublicIp() {
+    try {
+      // Try multiple public IP detection services
+      const services = [
+        'https://api.ipify.org?format=json',
+        'https://api.my-ip.io/v2/ip.json'
+      ];
+      
+      for (const url of services) {
+        try {
+          const res = await fetch(url, { timeout: 5000 });
+          if (res.ok) {
+            const data = await res.json();
+            publicIp = data.ip;
+            publicIpEl.textContent = publicIp;
+            publicIpEl.classList.add('cw-pip-detected');
+            return;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      // Fallback: show unknown
+      publicIpEl.textContent = 'Unknown';
+      publicIpEl.classList.add('cw-pip-unknown');
+    } catch (err) {
+      publicIpEl.textContent = 'Unknown';
+      publicIpEl.classList.add('cw-pip-unknown');
+    }
+  }
+  
+  // Run traceroute
+  async function runTrace(target) {
+    loadingOverlay.classList.remove('hidden');
+    pathSummary.style.display = 'none';
+    scrollHint.style.display = 'none';
+    showMessage(statusBanner, `Tracing path to ${target}...`, 'info');
+    
+    try {
+      const data = await fetchJson(`/traceroute/${encodeURIComponent(target)}`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+        timeoutMs: 120000 // 2 min timeout for traceroute
+      });
+      
+      currentTrace = data;
+      renderPath(data, target);
+      showMessage(statusBanner, `Path traced successfully: ${data.hops?.length || 0} hops`, 'success');
+      
+    } catch (err) {
+      showMessage(statusBanner, `Error: ${err.message}`, 'error');
+      pathCards.innerHTML = `
+        <div class="cw-path-error">
+          <p>Failed to trace path to ${target}</p>
+          <p class="cw-muted small">${err.message}</p>
+        </div>
+      `;
+    } finally {
+      loadingOverlay.classList.add('hidden');
+    }
+  }
+  
+  // Render the path visualization
+  function renderPath(data, originalTarget) {
+    const hops = data.hops || [];
+    const analytics = data.analytics || {};
+    
+    if (hops.length === 0) {
+      pathCards.innerHTML = `
+        <div class="cw-path-placeholder">
+          <p>No hops returned for ${originalTarget}</p>
+        </div>
+      `;
+      return;
+    }
+    
+    // Update summary stats
+    pathSummary.style.display = 'flex';
+    document.getElementById('summary-hops').textContent = hops.length;
+    document.getElementById('summary-rtt').textContent = `${(analytics.rtt_stats?.total_ms || 0).toFixed(1)} ms`;
+    document.getElementById('summary-asns').textContent = analytics.asn_count || 0;
+    document.getElementById('summary-countries').textContent = (analytics.countries_traversed || []).length;
+    document.getElementById('summary-loss').textContent = `${(analytics.packet_loss_pct || 0).toFixed(1)}%`;
+    
+    // Build cards HTML
+    let html = '';
+    
+    // Source card (CyberWatch / Public IP)
+    html += `
+      <div class="cw-hop-card cw-hop-source">
+        <div class="cw-hop-badge">
+          <span class="cw-hop-icon">🏠</span>
+        </div>
+        <div class="cw-hop-title">CyberWatch</div>
+        <div class="cw-hop-ip">${publicIp || 'Your Network'}</div>
+        <div class="cw-hop-label">Source</div>
+      </div>
+      <div class="cw-path-connector">
+        <div class="cw-connector-line"></div>
+        <div class="cw-connector-arrow">▶</div>
+      </div>
+    `;
+    
+    // Render each hop
+    hops.forEach((hop, index) => {
+      const isLast = index === hops.length - 1;
+      const isTimeout = !hop.ip || hop.ip === '*';
+      
+      html += renderHopCard(hop, index, isLast, isTimeout, originalTarget, data.target);
+      
+      // Add connector unless it's the last hop
+      if (!isLast) {
+        html += `
+          <div class="cw-path-connector">
+            <div class="cw-connector-line"></div>
+            <div class="cw-connector-arrow">▶</div>
+          </div>
+        `;
+      }
+    });
+    
+    pathCards.innerHTML = html;
+    
+    // Show scroll hint if content overflows
+    setTimeout(() => {
+      const container = document.getElementById('path-container');
+      if (container.scrollWidth > container.clientWidth) {
+        scrollHint.style.display = 'block';
+      }
+    }, 100);
+  }
+  
+  // Render individual hop card
+  function renderHopCard(hop, index, isLast, isTimeout, originalTarget, resolvedTarget) {
+    const hopNum = hop.hop || (index + 1);
+    
+    if (isTimeout) {
+      return `
+        <div class="cw-hop-card cw-hop-timeout">
+          <div class="cw-hop-badge cw-hop-num-badge">${hopNum}</div>
+          <div class="cw-hop-ip">*</div>
+          <div class="cw-hop-rtt-display">---</div>
+          <div class="cw-hop-label">No Response</div>
+        </div>
+      `;
+    }
+    
+    // Build ASN chip if available
+    let asnChip = '';
+    if (hop.asn) {
+      asnChip = `
+        <a href="/graph?asn=${hop.asn}" class="cw-hop-asn-chip" title="View AS${hop.asn} in Graph">
+          AS${hop.asn}
+        </a>
+      `;
+    }
+    
+    // Country badge
+    let countryBadge = '';
+    if (hop.country) {
+      countryBadge = `<span class="cw-country-badge">${hop.country}</span>`;
+    }
+    
+    // Org name (truncated)
+    let orgName = '';
+    if (hop.org_name) {
+      const truncated = hop.org_name.length > 20 ? hop.org_name.slice(0, 18) + '…' : hop.org_name;
+      orgName = `<div class="cw-hop-org" title="${hop.org_name}">${truncated}</div>`;
+    }
+    
+    // RTT display
+    const rttDisplay = hop.rtt_ms != null ? `${hop.rtt_ms.toFixed(1)} ms` : '---';
+    
+    // Special styling for last hop (destination)
+    const cardClass = isLast ? 'cw-hop-card cw-hop-destination' : 'cw-hop-card';
+    const destinationInfo = isLast ? renderDestinationInfo(originalTarget, resolvedTarget) : '';
+    
+    return `
+      <div class="${cardClass}">
+        <div class="cw-hop-badge cw-hop-num-badge">${hopNum}</div>
+        ${isLast ? destinationInfo : ''}
+        <div class="cw-hop-ip">${hop.ip}</div>
+        <div class="cw-hop-rtt-display">${rttDisplay}</div>
+        ${orgName}
+        <div class="cw-hop-meta">
+          ${asnChip}
+          ${countryBadge}
+        </div>
+      </div>
+    `;
+  }
+  
+  // Render destination info for last hop
+  function renderDestinationInfo(originalTarget, resolvedTarget) {
+    // Check if original target was a domain
+    const isDomain = !/^[\d.]+$/.test(originalTarget) && !/^[a-fA-F0-9:]+$/.test(originalTarget);
+    
+    if (isDomain) {
+      return `
+        <div class="cw-hop-domain">${originalTarget}</div>
+        <div class="cw-hop-label">Destination</div>
+      `;
+    }
+    return `<div class="cw-hop-label">Destination</div>`;
+  }
+  
+  // Form submit handler
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const target = targetInput.value.trim();
+    if (!target) return;
+    await runTrace(target);
+  });
+  
+  // Initialize
+  detectPublicIp();
+  
+})();
+</script>
+{% endblock %}

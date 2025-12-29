@@ -72,6 +72,11 @@ async def graph_page(request: Request):
     return templates.TemplateResponse("graph.html", _ctx(request))
 
 
+@app.get("/path", response_class=HTMLResponse)
+async def path_page(request: Request):
+    return templates.TemplateResponse("path.html", _ctx(request))
+
+
 @app.get("/dns", response_class=HTMLResponse)
 async def dns_page(request: Request):
     return templates.TemplateResponse("dns.html", _ctx(request))

@@ -1081,3 +1081,440 @@ body {
 		right: -100%;
 	}
 }
+
+/* ============================================
+   Path Visualization Page Styles
+   ============================================ */
+
+/* Path page layout - full viewport */
+.cw-path-page .cw-page {
+	max-width: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	height: calc(100vh - 80px);
+}
+
+.cw-path-layout {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+}
+
+/* Header section with input form */
+.cw-path-header {
+	flex-shrink: 0;
+	padding: 1.25rem;
+	background: rgba(10, 14, 26, 0.6);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.cw-path-header .cw-card {
+	max-width: 1400px;
+	margin: 0 auto;
+}
+
+/* Public IP badge */
+.cw-public-ip-badge {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	padding: 0.5rem 0.85rem;
+	background: rgba(124, 243, 255, 0.08);
+	border: 1px solid rgba(124, 243, 255, 0.3);
+	border-radius: 10px;
+}
+
+.cw-pip-label {
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: #8aa5c1;
+}
+
+.cw-pip-value {
+	font-size: 1rem;
+	font-family: "Consolas", "Monaco", monospace;
+	font-weight: 600;
+	color: #8aa5c1;
+}
+
+.cw-pip-value.cw-pip-detected {
+	color: #7cf3ff;
+}
+
+.cw-pip-value.cw-pip-unknown {
+	color: #ffd7d7;
+}
+
+/* Path summary stats bar */
+.cw-path-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 1rem;
+	margin-top: 1rem;
+	padding-top: 1rem;
+	border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cw-summary-item {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 0.5rem 1rem;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid rgba(255, 255, 255, 0.06);
+	border-radius: 8px;
+	min-width: 100px;
+}
+
+.cw-summary-label {
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: #8aa5c1;
+	margin-bottom: 0.15rem;
+}
+
+.cw-summary-value {
+	font-size: 1.2rem;
+	font-weight: 700;
+	color: #7cf3ff;
+	font-family: "Consolas", "Monaco", monospace;
+}
+
+/* Main path visualization area */
+.cw-path-main {
+	flex: 1;
+	position: relative;
+	overflow: hidden;
+	background: radial-gradient(circle at 50% 50%, rgba(124, 243, 255, 0.02), transparent 60%);
+}
+
+/* Path container - horizontal scroll */
+.cw-path-container {
+	height: 100%;
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding: 2rem;
+	display: flex;
+	align-items: center;
+}
+
+.cw-path-container::-webkit-scrollbar {
+	height: 8px;
+}
+
+.cw-path-container::-webkit-scrollbar-track {
+	background: rgba(255, 255, 255, 0.05);
+	border-radius: 4px;
+}
+
+.cw-path-container::-webkit-scrollbar-thumb {
+	background: rgba(124, 243, 255, 0.3);
+	border-radius: 4px;
+}
+
+.cw-path-container::-webkit-scrollbar-thumb:hover {
+	background: rgba(124, 243, 255, 0.5);
+}
+
+/* Path cards flex container */
+.cw-path-cards {
+	display: flex;
+	align-items: center;
+	gap: 0;
+	padding: 1rem 2rem;
+	min-height: 280px;
+}
+
+/* Placeholder when no trace */
+.cw-path-placeholder,
+.cw-path-error {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: 3rem;
+	color: #8aa5c1;
+	width: 100%;
+}
+
+.cw-path-error {
+	color: #ffd7d7;
+}
+
+/* Individual hop card */
+.cw-hop-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	min-width: 140px;
+	max-width: 160px;
+	padding: 1rem;
+	background: linear-gradient(145deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+	border: 1px solid rgba(124, 243, 255, 0.25);
+	border-radius: 14px;
+	box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+	backdrop-filter: blur(8px);
+	transition: all 0.3s ease;
+	flex-shrink: 0;
+}
+
+.cw-hop-card:hover {
+	transform: translateY(-4px);
+	border-color: #7cf3ff;
+	box-shadow: 0 0 25px rgba(124, 243, 255, 0.3), 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* Source card styling */
+.cw-hop-source {
+	background: linear-gradient(145deg, rgba(159, 127, 255, 0.15), rgba(124, 243, 255, 0.08));
+	border-color: rgba(159, 127, 255, 0.4);
+}
+
+.cw-hop-source:hover {
+	border-color: #9f7fff;
+	box-shadow: 0 0 25px rgba(159, 127, 255, 0.4), 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* Destination card styling */
+.cw-hop-destination {
+	background: linear-gradient(145deg, rgba(61, 214, 142, 0.15), rgba(124, 243, 255, 0.08));
+	border-color: rgba(61, 214, 142, 0.4);
+	min-width: 160px;
+	max-width: 200px;
+}
+
+.cw-hop-destination:hover {
+	border-color: #3dd68e;
+	box-shadow: 0 0 25px rgba(61, 214, 142, 0.4), 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* Timeout hop styling */
+.cw-hop-timeout {
+	background: linear-gradient(145deg, rgba(255, 193, 7, 0.08), rgba(255, 255, 255, 0.02));
+	border-color: rgba(255, 193, 7, 0.3);
+	opacity: 0.7;
+}
+
+.cw-hop-timeout:hover {
+	opacity: 1;
+	border-color: rgba(255, 193, 7, 0.5);
+}
+
+/* Hop badge (number or icon) */
+.cw-hop-badge {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	margin-bottom: 0.5rem;
+	font-size: 0.9rem;
+}
+
+.cw-hop-num-badge {
+	background: rgba(124, 243, 255, 0.15);
+	border: 1px solid rgba(124, 243, 255, 0.4);
+	color: #7cf3ff;
+	font-weight: 700;
+	font-family: "Consolas", "Monaco", monospace;
+}
+
+.cw-hop-icon {
+	font-size: 1.3rem;
+}
+
+/* Hop title (for source) */
+.cw-hop-title {
+	font-size: 0.9rem;
+	font-weight: 700;
+	color: #e8ecf5;
+	margin-bottom: 0.25rem;
+}
+
+/* Domain display for destination */
+.cw-hop-domain {
+	font-size: 0.85rem;
+	font-weight: 600;
+	color: #3dd68e;
+	margin-bottom: 0.15rem;
+	word-break: break-all;
+	text-align: center;
+	max-width: 100%;
+}
+
+/* Hop IP address */
+.cw-hop-ip {
+	font-size: 0.85rem;
+	font-family: "Consolas", "Monaco", monospace;
+	color: #e8ecf5;
+	margin-bottom: 0.25rem;
+	word-break: break-all;
+	text-align: center;
+}
+
+/* RTT display */
+.cw-hop-rtt-display {
+	font-size: 0.8rem;
+	font-family: "Consolas", "Monaco", monospace;
+	color: #9fb3d1;
+	margin-bottom: 0.35rem;
+}
+
+/* Organization name */
+.cw-hop-org {
+	font-size: 0.75rem;
+	color: #8aa5c1;
+	text-align: center;
+	margin-bottom: 0.35rem;
+	line-height: 1.2;
+	max-width: 100%;
+}
+
+/* Label (Source / Destination / No Response) */
+.cw-hop-label {
+	font-size: 0.65rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: #8aa5c1;
+	margin-top: 0.25rem;
+}
+
+/* Hop meta (ASN chip + country badge) */
+.cw-hop-meta {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	margin-top: 0.35rem;
+	flex-wrap: wrap;
+	justify-content: center;
+}
+
+/* ASN chip in hop card */
+.cw-hop-asn-chip {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.2rem 0.5rem;
+	border-radius: 999px;
+	background: rgba(124, 243, 255, 0.12);
+	border: 1px solid rgba(124, 243, 255, 0.4);
+	color: #7cf3ff;
+	font-size: 0.7rem;
+	font-weight: 600;
+	text-decoration: none;
+	transition: all 0.2s ease;
+}
+
+.cw-hop-asn-chip:hover {
+	background: rgba(124, 243, 255, 0.25);
+	border-color: #7cf3ff;
+	box-shadow: 0 0 10px rgba(124, 243, 255, 0.3);
+}
+
+/* Path connector (line + arrow) */
+.cw-path-connector {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	margin: 0 0.25rem;
+}
+
+.cw-connector-line {
+	width: 30px;
+	height: 2px;
+	background: linear-gradient(90deg, rgba(124, 243, 255, 0.4), rgba(159, 127, 255, 0.4));
+	box-shadow: 0 0 6px rgba(124, 243, 255, 0.3);
+}
+
+.cw-connector-arrow {
+	color: rgba(124, 243, 255, 0.6);
+	font-size: 0.7rem;
+	margin-left: -2px;
+}
+
+/* Scroll hint */
+.cw-scroll-hint {
+	position: absolute;
+	bottom: 1rem;
+	left: 50%;
+	transform: translateX(-50%);
+	padding: 0.5rem 1rem;
+	background: rgba(10, 14, 26, 0.9);
+	border: 1px solid rgba(124, 243, 255, 0.3);
+	border-radius: 20px;
+	color: #7cf3ff;
+	font-size: 0.8rem;
+	animation: pulse-hint 2s ease-in-out infinite;
+}
+
+@keyframes pulse-hint {
+	0%, 100% { opacity: 0.7; }
+	50% { opacity: 1; }
+}
+
+/* Responsive adjustments for path page */
+@media (max-width: 900px) {
+	.cw-path-header .cw-card-header {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 1rem;
+	}
+	
+	.cw-public-ip-badge {
+		align-items: flex-start;
+	}
+	
+	.cw-path-summary {
+		gap: 0.5rem;
+	}
+	
+	.cw-summary-item {
+		min-width: 80px;
+		padding: 0.4rem 0.6rem;
+	}
+	
+	.cw-summary-value {
+		font-size: 1rem;
+	}
+	
+	.cw-hop-card {
+		min-width: 120px;
+		max-width: 140px;
+		padding: 0.75rem;
+	}
+	
+	.cw-connector-line {
+		width: 20px;
+	}
+}
+
+@media (max-width: 600px) {
+	.cw-path-container {
+		padding: 1rem;
+	}
+	
+	.cw-path-cards {
+		padding: 0.5rem 1rem;
+	}
+	
+	.cw-hop-card {
+		min-width: 100px;
+		max-width: 120px;
+	}
+	
+	.cw-hop-badge {
+		width: 28px;
+		height: 28px;
+		font-size: 0.75rem;
+	}
+	
+	.cw-hop-ip {
+		font-size: 0.75rem;
+	}
+}
