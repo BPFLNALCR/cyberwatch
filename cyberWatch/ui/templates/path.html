@@ -20,7 +20,7 @@
       </div>
       
       <form id="path-form" class="cw-form">
-        <label for="target">Enter a domain or IP address to trace</label>
+        <label for="target">Enter a domain or IP address, or select from known targets below</label>
         <div class="cw-input-row">
           <input type="text" id="target" name="target" placeholder="example.com or 8.8.8.8" required>
           <button type="submit">Trace Path</button>
@@ -28,6 +28,17 @@
       </form>
       
       <div id="path-status" class="cw-banner"></div>
+      
+      <!-- Known DNS targets list -->
+      <div id="known-targets-section" class="cw-known-targets">
+        <div class="cw-known-header">
+          <span class="cw-known-label">Known Destinations</span>
+          <span class="cw-known-count" id="target-count">Loading...</span>
+        </div>
+        <div id="known-targets-list" class="cw-known-list">
+          <span class="cw-muted small">Loading DNS targets...</span>
+        </div>
+      </div>
       
       <!-- Summary stats (hidden until results) -->
       <div id="path-summary" class="cw-path-summary" style="display: none;">
@@ -89,6 +100,7 @@
   // State
   let publicIp = null;
   let currentTrace = null;
+  let knownTargets = [];
   
   // DOM elements
   const form = document.getElementById('path-form');
@@ -99,6 +111,8 @@
   const pathSummary = document.getElementById('path-summary');
   const scrollHint = document.getElementById('scroll-hint');
   const publicIpEl = document.getElementById('public-ip');
+  const knownTargetsList = document.getElementById('known-targets-list');
+  const targetCountEl = document.getElementById('target-count');
   
   // Detect public IP on page load
   async function detectPublicIp() {
@@ -133,7 +147,53 @@
     }
   }
   
-  // Run traceroute
+  // Load known DNS targets
+  async function loadKnownTargets() {
+    try {
+      const data = await fetchJson('/dns/top-domains?limit=100');
+      knownTargets = data || [];
+      renderKnownTargets();
+    } catch (err) {
+      knownTargetsList.innerHTML = '<span class="cw-muted small">No DNS data available yet</span>';
+      targetCountEl.textContent = '0 targets';
+    }
+  }
+  
+  // Render known targets as clickable chips
+  function renderKnownTargets() {
+    if (knownTargets.length === 0) {
+      knownTargetsList.innerHTML = '<span class="cw-muted small">No DNS targets recorded yet. Traceroute history or DNS collector will populate this.</span>';
+      targetCountEl.textContent = '0 targets';
+      return;
+    }
+    
+    targetCountEl.textContent = `${knownTargets.length} domains`;
+    
+    // Render as clickable chips
+    const html = knownTargets.map(t => {
+      const queries = t.total_queries || 0;
+      const ips = t.unique_ips || 1;
+      return `
+        <button type="button" class="cw-target-chip" data-domain="${t.domain}" title="${queries} queries, ${ips} IPs">
+          <span class="cw-target-domain">${t.domain}</span>
+          <span class="cw-target-queries">${queries}</span>
+        </button>
+      `;
+    }).join('');
+    
+    knownTargetsList.innerHTML = html;
+    
+    // Add click handlers
+    knownTargetsList.querySelectorAll('.cw-target-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const domain = chip.dataset.domain;
+        targetInput.value = domain;
+        runTrace(domain);
+      });
+    });
+  }
+  
+  // Run traceroute - FIXED: use correct API endpoint
   async function runTrace(target) {
     loadingOverlay.classList.remove('hidden');
     pathSummary.style.display = 'none';
@@ -141,9 +201,10 @@
     showMessage(statusBanner, `Tracing path to ${target}...`, 'info');
     
     try {
-      const data = await fetchJson(`/traceroute/${encodeURIComponent(target)}`, {
+      // Correct API: POST /traceroute/run with JSON body
+      const data = await fetchJson('/traceroute/run', {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ target: target }),
         timeoutMs: 120000 // 2 min timeout for traceroute
       });
       
@@ -318,6 +379,7 @@
   
   // Initialize
   detectPublicIp();
+  loadKnownTargets();
   
 })();
 </script>

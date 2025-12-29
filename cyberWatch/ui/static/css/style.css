@@ -1458,6 +1458,99 @@ body {
 	50% { opacity: 1; }
 }
 
+/* Known targets section */
+.cw-known-targets {
+	margin-top: 1rem;
+	padding-top: 1rem;
+	border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.cw-known-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 0.75rem;
+}
+
+.cw-known-label {
+	font-size: 0.85rem;
+	color: #8aa5c1;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.cw-known-count {
+	font-size: 0.8rem;
+	color: #7cf3ff;
+	padding: 0.2rem 0.5rem;
+	background: rgba(124, 243, 255, 0.1);
+	border-radius: 999px;
+}
+
+.cw-known-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	max-height: 120px;
+	overflow-y: auto;
+	padding-right: 0.5rem;
+}
+
+.cw-known-list::-webkit-scrollbar {
+	width: 6px;
+}
+
+.cw-known-list::-webkit-scrollbar-track {
+	background: rgba(255, 255, 255, 0.05);
+	border-radius: 3px;
+}
+
+.cw-known-list::-webkit-scrollbar-thumb {
+	background: rgba(124, 243, 255, 0.3);
+	border-radius: 3px;
+}
+
+/* Target chip button */
+.cw-target-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.4rem 0.75rem;
+	background: rgba(255, 255, 255, 0.04);
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	border-radius: 8px;
+	color: #e8ecf5;
+	font-size: 0.85rem;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.cw-target-chip:hover {
+	background: rgba(124, 243, 255, 0.1);
+	border-color: rgba(124, 243, 255, 0.4);
+	transform: translateY(-1px);
+}
+
+.cw-target-chip:active {
+	transform: translateY(0);
+}
+
+.cw-target-domain {
+	font-family: "Consolas", "Monaco", monospace;
+	max-width: 180px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cw-target-queries {
+	font-size: 0.7rem;
+	padding: 0.15rem 0.4rem;
+	background: rgba(159, 127, 255, 0.2);
+	border-radius: 999px;
+	color: #c9b8ff;
+}
+
 /* Responsive adjustments for path page */
 @media (max-width: 900px) {
 	.cw-path-header .cw-card-header {
