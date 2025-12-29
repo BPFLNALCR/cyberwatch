@@ -20,6 +20,12 @@ const physics = {
   cardWidth: 200,
   cardHeight: 150,
   padding: 40,  // Gap between cards
+  // Force-directed physics
+  repulsion: 80000,        // Node repulsion strength
+  edgeAttraction: 0.008,   // Edge spring constant
+  idealEdgeLength: 280,    // Target edge length
+  damping: 0.85,           // Velocity damping (friction)
+  minVelocity: 0.1,        // Stop simulation when velocity below this
 };
 
 // DOM elements
@@ -483,30 +489,112 @@ function startSimulation() {
     clearInterval(simulationInterval);
   }
   
-  // Immediately resolve any initial overlaps
-  for (let i = 0; i < 50; i++) {
-    if (!resolveOverlapsOnePass()) break;
-  }
-  updatePositions();
+  // Initialize velocities
+  state.nodes.forEach(node => {
+    node.vx = 0;
+    node.vy = 0;
+  });
   
   let iterations = 0;
-  const maxIterations = 150;
+  const maxIterations = 300;
   
   simulationInterval = setInterval(() => {
-    // Resolve ALL overlaps first (multiple passes until stable)
-    for (let i = 0; i < 50; i++) {
+    // Apply forces
+    applyForces();
+    
+    // Resolve any overlaps after forces
+    for (let i = 0; i < 10; i++) {
       if (!resolveOverlapsOnePass()) break;
     }
+    
+    // Apply damping
+    let maxVelocity = 0;
+    state.nodes.forEach(node => {
+      node.vx *= physics.damping;
+      node.vy *= physics.damping;
+      maxVelocity = Math.max(maxVelocity, Math.abs(node.vx), Math.abs(node.vy));
+    });
     
     updatePositions();
     
     iterations++;
-    if (iterations >= maxIterations) {
+    // Stop when stabilized or max iterations reached
+    if (maxVelocity < physics.minVelocity || iterations >= maxIterations) {
       clearInterval(simulationInterval);
       simulationInterval = null;
       centerGraph();
     }
   }, 20);
+}
+
+function applyForces() {
+  const nodes = state.nodes;
+  
+  // Reset accelerations
+  nodes.forEach(node => {
+    node.ax = 0;
+    node.ay = 0;
+  });
+  
+  // Node-node repulsion (keeps cards apart)
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const ni = nodes[i];
+      const nj = nodes[j];
+      
+      const dx = nj.x - ni.x;
+      const dy = nj.y - ni.y;
+      const distSq = dx * dx + dy * dy;
+      const dist = Math.sqrt(distSq) || 1;
+      
+      // Repulsion force (inverse square law)
+      const force = physics.repulsion / distSq;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      
+      ni.ax -= fx;
+      ni.ay -= fy;
+      nj.ax += fx;
+      nj.ay += fy;
+    }
+  }
+  
+  // Edge attraction (connected nodes pull together)
+  state.edges.forEach(edge => {
+    const source = nodes.find(n => n.asn === edge.source);
+    const target = nodes.find(n => n.asn === edge.target);
+    
+    if (source && target) {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      
+      // Spring force toward ideal length
+      const displacement = dist - physics.idealEdgeLength;
+      const force = displacement * physics.edgeAttraction;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      
+      source.ax += fx;
+      source.ay += fy;
+      target.ax -= fx;
+      target.ay -= fy;
+    }
+  });
+  
+  // Apply accelerations to velocities and positions
+  nodes.forEach(node => {
+    node.vx += node.ax;
+    node.vy += node.ay;
+    
+    // Limit max velocity
+    const maxV = 50;
+    node.vx = Math.max(-maxV, Math.min(maxV, node.vx));
+    node.vy = Math.max(-maxV, Math.min(maxV, node.vy));
+    
+    node.x += node.vx;
+    node.y += node.vy;
+  });
 }
 
 // Returns true if any overlap was found and fixed
@@ -597,8 +685,6 @@ function centerGraph() {
   state.transform.scale = 1;
   applyTransform();
 }
-
-// Removed applyForces - no edge attraction, just collision resolution
 
 function updatePositions() {
   // Update node positions
