@@ -13,11 +13,14 @@ from typing import List, Optional, Sequence, Tuple
 from pydantic import BaseModel, IPvAnyAddress
 
 from cyberWatch.db.pg import create_pool, insert_measurement
-from cyberWatch.db.settings import get_worker_settings
+from cyberWatch.db.settings import get_worker_settings_with_defaults, apply_cache_settings
 from cyberWatch.scheduler.queue import TargetQueue, TargetTask
 from cyberWatch.logging_config import get_logger
 
 logger = get_logger("worker")
+
+# Default task timeout (can be overridden by settings)
+DEFAULT_TASK_TIMEOUT_SECONDS = 300
 
 class HopModel(BaseModel):
     hop: int
@@ -266,7 +269,7 @@ async def run_traceroute(target: str) -> MeasurementResult:
 
 
 class Worker:
-    """Measurement worker loop with rate limiting."""
+    """Measurement worker loop with rate limiting and task timeout."""
 
     def __init__(self) -> None:
         self.queue = TargetQueue()
@@ -274,6 +277,7 @@ class Worker:
         self.pg_dsn = dsn
         self.rate_limit_per_minute = 30  # Default
         self.max_concurrent = 5  # Default
+        self.task_timeout_seconds = DEFAULT_TASK_TIMEOUT_SECONDS
         self.semaphore: Optional[asyncio.Semaphore] = None
         self.rate_limiter_tokens: List[float] = []  # Token bucket timestamps
 
@@ -310,18 +314,23 @@ class Worker:
         
         pool = await create_pool(self.pg_dsn)
         
-        # Load settings from database
-        settings = await get_worker_settings(pool)
-        if settings:
-            self.rate_limit_per_minute = settings.get("rate_limit_per_minute", 30)
-            self.max_concurrent = settings.get("max_concurrent_traceroutes", 5)
-            logger.info(
-                "Worker settings loaded",
-                extra={
-                    "rate_limit": self.rate_limit_per_minute,
-                    "max_concurrent": self.max_concurrent,
-                }
-            )
+        # Apply cache settings for enrichment modules
+        await apply_cache_settings(pool)
+        
+        # Load settings from database with defaults
+        settings = await get_worker_settings_with_defaults(pool)
+        self.rate_limit_per_minute = settings.get("rate_limit_per_minute", 30)
+        self.max_concurrent = settings.get("max_concurrent_traceroutes", 5)
+        self.task_timeout_seconds = settings.get("task_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+        
+        logger.info(
+            "Worker settings loaded",
+            extra={
+                "rate_limit": self.rate_limit_per_minute,
+                "max_concurrent": self.max_concurrent,
+                "task_timeout": self.task_timeout_seconds,
+            }
+        )
         
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
         
@@ -332,6 +341,7 @@ class Worker:
                 "state": "ready",
                 "rate_limit_per_minute": self.rate_limit_per_minute,
                 "max_concurrent": self.max_concurrent,
+                "task_timeout_seconds": self.task_timeout_seconds,
             }
         )
         
@@ -362,9 +372,34 @@ class Worker:
             logger.info("Worker stopped", extra={"state": "stopped"})
 
     async def _handle_task_with_semaphore(self, pool, task: TargetTask) -> None:
-        """Handle task with semaphore to limit concurrency."""
+        """Handle task with semaphore to limit concurrency and timeout to prevent hangs."""
         async with self.semaphore:
-            await self.handle_task(pool, task)
+            try:
+                await asyncio.wait_for(
+                    self.handle_task(pool, task),
+                    timeout=self.task_timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Task timed out",
+                    extra={
+                        "target": str(task.target_ip),
+                        "source": task.source,
+                        "timeout_seconds": self.task_timeout_seconds,
+                        "outcome": "timeout",
+                    }
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Task failed with unexpected error: {exc}",
+                    exc_info=True,
+                    extra={
+                        "target": str(task.target_ip),
+                        "source": task.source,
+                        "outcome": "error",
+                        "error_type": type(exc).__name__,
+                    }
+                )
 
     async def handle_task(self, pool, task: TargetTask) -> None:
         task_id = str(uuid.uuid4())

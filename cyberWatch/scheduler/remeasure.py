@@ -8,13 +8,13 @@ from datetime import datetime
 
 from cyberWatch.db.pg import create_pool, get_targets_for_remeasurement, touch_target
 from cyberWatch.db.settings import get_remeasurement_settings
-from cyberWatch.scheduler.queue import Queue, TargetTask
+from cyberWatch.scheduler.queue import TargetQueue, TargetTask
 from cyberWatch.logging_config import get_logger
 
 logger = get_logger("remeasure")
 
 
-async def run_remeasurement_cycle(pool, queue: Queue, config: dict) -> int:
+async def run_remeasurement_cycle(pool, queue: TargetQueue, config: dict) -> int:
     """
     Run one remeasurement cycle.
     Returns number of targets re-enqueued.
@@ -100,7 +100,7 @@ async def main_loop() -> None:
     )
     
     pool = await create_pool(dsn)
-    queue = Queue(redis_url)
+    queue = TargetQueue(redis_url)
     
     try:
         while True:

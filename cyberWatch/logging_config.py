@@ -4,7 +4,22 @@ Centralized logging configuration for CyberWatch.
 Provides structured JSONL logging with rotation, context injection,
 and component-specific loggers. Enabled by default with environment
 variable configuration.
+
+Request ID Propagation:
+    Use `set_request_id()` to set the current request ID in async contexts.
+    The request ID will be automatically included in all log records.
+    
+    Example:
+        from cyberWatch.logging_config import set_request_id, get_request_id
+        
+        # In middleware or request handler:
+        set_request_id(str(uuid.uuid4()))
+        
+        # Later in any async code path:
+        logger.info("Processing", extra={"action": "process"})
+        # Log will include: "request_id": "<uuid>"
 """
+import contextvars
 import logging
 import logging.handlers
 import json
@@ -15,10 +30,50 @@ from typing import Any, Dict, Optional
 import traceback
 
 
+# Context variable for request ID propagation across async boundaries
+_request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default=""
+)
+
+
+def set_request_id(request_id: str) -> contextvars.Token:
+    """
+    Set the current request ID for this async context.
+    
+    Args:
+        request_id: The request ID to set
+        
+    Returns:
+        Token that can be used to reset the context variable
+    """
+    return _request_id_var.set(request_id)
+
+
+def get_request_id() -> str:
+    """
+    Get the current request ID from this async context.
+    
+    Returns:
+        The current request ID, or empty string if not set
+    """
+    return _request_id_var.get()
+
+
+def reset_request_id(token: contextvars.Token) -> None:
+    """
+    Reset the request ID context variable to its previous state.
+    
+    Args:
+        token: Token returned by set_request_id()
+    """
+    _request_id_var.reset(token)
+
+
 class JSONLFormatter(logging.Formatter):
     """
     Custom formatter that outputs logs in JSON Lines format.
     Each log entry is a single-line JSON object with standardized fields.
+    Automatically includes request_id from contextvars if set.
     """
     
     def __init__(self, component: str = "cyberwatch"):
@@ -49,6 +104,11 @@ class JSONLFormatter(logging.Formatter):
             "function": record.funcName,
             "line": record.lineno,
         }
+        
+        # Automatically include request_id from contextvars if set
+        request_id = get_request_id()
+        if request_id:
+            log_data["request_id"] = request_id
         
         # Add exception information if present
         if record.exc_info:

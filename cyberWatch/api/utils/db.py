@@ -6,7 +6,6 @@ request time instead of crashing the process during startup.
 """
 from __future__ import annotations
 
-import logging
 import os
 from typing import AsyncGenerator, Optional
 
@@ -14,9 +13,18 @@ import asyncpg
 from fastapi import Depends, HTTPException, status
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-logger = logging.getLogger(__name__)
+from cyberWatch.logging_config import get_logger
+
+logger = get_logger("db")
+
 
 def _clean(val: str | None, default: str) -> str:
+    """
+    Clean environment variable values that may have spurious quotes or brackets.
+    
+    This handles Windows environment parsing issues where values may be wrapped
+    in quotes or have trailing brackets from shell expansion.
+    """
     if not val:
         return default
     cleaned = val.strip().strip("\"").strip("'").rstrip("]").rstrip("\"")

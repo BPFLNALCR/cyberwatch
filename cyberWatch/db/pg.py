@@ -4,12 +4,65 @@ from __future__ import annotations
 import asyncpg
 import time
 from asyncpg import Connection, Pool
-from typing import Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from datetime import datetime
 
 from cyberWatch.logging_config import get_logger
 
 logger = get_logger("db")
+
+
+def build_dynamic_update(
+    table: str,
+    where_column: str,
+    updates: Dict[str, Any],
+    *,
+    add_timestamps: bool = True,
+) -> Tuple[str, List[Any]]:
+    """
+    Build a parameterized UPDATE SQL statement from a dictionary of updates.
+    
+    Only includes non-None values in the update. This helper prevents SQL
+    injection by using parameterized queries while supporting dynamic columns.
+    
+    Args:
+        table: Table name to update
+        where_column: Column name for WHERE clause (e.g., 'id', 'asn')
+        updates: Dictionary of column_name: value pairs (None values are skipped)
+        add_timestamps: If True, adds updated_at = NOW() and last_seen = NOW()
+        
+    Returns:
+        Tuple of (SQL string, list of values including where_value)
+        The where_value should be prepended to the values list by the caller
+        
+    Example:
+        sql, values = build_dynamic_update(
+            "asns",
+            "asn",
+            {"org_name": "Example", "country_code": "US", "facility_count": None}
+        )
+        # sql = "UPDATE asns SET org_name = $2, country_code = $3, updated_at = NOW(), last_seen = NOW() WHERE asn = $1"
+        # values = ["Example", "US"]
+    """
+    set_clauses = []
+    values = []
+    param_num = 2  # $1 is reserved for WHERE column
+    
+    for column, value in updates.items():
+        if value is not None:
+            set_clauses.append(f"{column} = ${param_num}")
+            values.append(value)
+            param_num += 1
+    
+    if add_timestamps:
+        set_clauses.append("updated_at = NOW()")
+        set_clauses.append("last_seen = NOW()")
+    
+    if not set_clauses:
+        return "", values
+    
+    sql = f"UPDATE {table} SET {', '.join(set_clauses)} WHERE {where_column} = $1"
+    return sql, values
 
 
 async def create_pool(dsn: str) -> Pool:
@@ -305,56 +358,21 @@ async def upsert_asn(
         existing = await conn.fetchrow("SELECT * FROM asns WHERE asn = $1", asn)
         
         if existing:
-            # Update only non-None fields
-            updates = []
-            values = []
-            param_num = 2  # $1 is asn
+            # Build dynamic update using helper
+            updates = {
+                "org_name": org_name,
+                "country_code": country_code,
+                "source": source,
+                "peeringdb_id": peeringdb_id,
+                "facility_count": facility_count,
+                "peering_policy": peering_policy,
+                "traffic_levels": traffic_levels,
+                "irr_as_set": irr_as_set,
+            }
             
-            if org_name is not None:
-                updates.append(f"org_name = ${param_num}")
-                values.append(org_name)
-                param_num += 1
+            query, values = build_dynamic_update("asns", "asn", updates, add_timestamps=True)
             
-            if country_code is not None:
-                updates.append(f"country_code = ${param_num}")
-                values.append(country_code)
-                param_num += 1
-            
-            if source is not None:
-                updates.append(f"source = ${param_num}")
-                values.append(source)
-                param_num += 1
-            
-            if peeringdb_id is not None:
-                updates.append(f"peeringdb_id = ${param_num}")
-                values.append(peeringdb_id)
-                param_num += 1
-            
-            if facility_count is not None:
-                updates.append(f"facility_count = ${param_num}")
-                values.append(facility_count)
-                param_num += 1
-            
-            if peering_policy is not None:
-                updates.append(f"peering_policy = ${param_num}")
-                values.append(peering_policy)
-                param_num += 1
-            
-            if traffic_levels is not None:
-                updates.append(f"traffic_levels = ${param_num}")
-                values.append(traffic_levels)
-                param_num += 1
-            
-            if irr_as_set is not None:
-                updates.append(f"irr_as_set = ${param_num}")
-                values.append(irr_as_set)
-                param_num += 1
-            
-            if updates:
-                updates.append("last_seen = NOW()")
-                updates.append("updated_at = NOW()")
-                
-                query = f"UPDATE asns SET {', '.join(updates)} WHERE asn = $1"
+            if query:
                 await conn.execute(query, asn, *values)
         else:
             # Insert new record
@@ -415,34 +433,17 @@ async def update_asn_stats(
     avg_rtt_ms: Optional[float] = None,
 ) -> None:
     """Update ASN statistics."""
-    async with pool.acquire() as conn:
-        updates = []
-        values = []
-        param_num = 2  # $1 is asn
-        
-        if prefix_count is not None:
-            updates.append(f"prefix_count = ${param_num}")
-            values.append(prefix_count)
-            param_num += 1
-        
-        if neighbor_count is not None:
-            updates.append(f"neighbor_count = ${param_num}")
-            values.append(neighbor_count)
-            param_num += 1
-        
-        if total_measurements is not None:
-            updates.append(f"total_measurements = ${param_num}")
-            values.append(total_measurements)
-            param_num += 1
-        
-        if avg_rtt_ms is not None:
-            updates.append(f"avg_rtt_ms = ${param_num}")
-            values.append(avg_rtt_ms)
-            param_num += 1
-        
-        if updates:
-            updates.append("updated_at = NOW()")
-            query = f"UPDATE asns SET {', '.join(updates)} WHERE asn = $1"
+    updates = {
+        "prefix_count": prefix_count,
+        "neighbor_count": neighbor_count,
+        "total_measurements": total_measurements,
+        "avg_rtt_ms": avg_rtt_ms,
+    }
+    
+    query, values = build_dynamic_update("asns", "asn", updates, add_timestamps=True)
+    
+    if query:
+        async with pool.acquire() as conn:
             await conn.execute(query, asn, *values)
 
 

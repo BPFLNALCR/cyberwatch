@@ -183,12 +183,14 @@ async def save_worker_settings(
     rate_limit_per_minute: int = 30,
     max_concurrent_traceroutes: int = 5,
     worker_count: int = 2,
+    task_timeout_seconds: int = 300,
 ) -> None:
     """Save worker configuration settings."""
     await set_setting(pool, WORKER_SETTINGS_KEY, {
         "rate_limit_per_minute": rate_limit_per_minute,
         "max_concurrent_traceroutes": max_concurrent_traceroutes,
         "worker_count": worker_count,
+        "task_timeout_seconds": task_timeout_seconds,
     })
 
 
@@ -210,6 +212,9 @@ async def save_enrichment_settings(
     asn_expansion_interval_minutes: int = 60,
     asn_min_neighbor_count: int = 5,
     asn_max_ips_per_asn: int = 10,
+    cache_ttl_seconds: int = 3600,
+    peeringdb_cache_ttl_seconds: int = 86400,
+    task_timeout_seconds: int = 300,
 ) -> None:
     """Save enrichment configuration settings."""
     await set_setting(pool, ENRICHMENT_SETTINGS_KEY, {
@@ -219,6 +224,9 @@ async def save_enrichment_settings(
         "asn_expansion_interval_minutes": asn_expansion_interval_minutes,
         "asn_min_neighbor_count": asn_min_neighbor_count,
         "asn_max_ips_per_asn": asn_max_ips_per_asn,
+        "cache_ttl_seconds": cache_ttl_seconds,
+        "peeringdb_cache_ttl_seconds": peeringdb_cache_ttl_seconds,
+        "task_timeout_seconds": task_timeout_seconds,
     })
 
 
@@ -246,3 +254,97 @@ async def save_remeasurement_settings(
         "batch_size": batch_size,
         "targets_per_run": targets_per_run,
     })
+
+
+# Default settings with fallback values
+DEFAULT_WORKER_SETTINGS = {
+    "rate_limit_per_minute": 30,
+    "max_concurrent_traceroutes": 5,
+    "worker_count": 2,
+    "task_timeout_seconds": 300,
+}
+
+DEFAULT_ENRICHMENT_SETTINGS = {
+    "poll_interval_seconds": 10,
+    "batch_size": 200,
+    "asn_expansion_enabled": True,
+    "asn_expansion_interval_minutes": 60,
+    "asn_min_neighbor_count": 5,
+    "asn_max_ips_per_asn": 10,
+    "cache_ttl_seconds": 3600,
+    "peeringdb_cache_ttl_seconds": 86400,
+    "task_timeout_seconds": 300,
+}
+
+DEFAULT_REMEASUREMENT_SETTINGS = {
+    "enabled": True,
+    "interval_hours": 24,
+    "batch_size": 100,
+    "targets_per_run": 500,
+}
+
+
+async def get_worker_settings_with_defaults(pool: Pool) -> Dict[str, Any]:
+    """Get worker settings with fallback to defaults."""
+    settings = await get_setting(pool, WORKER_SETTINGS_KEY)
+    if settings is None:
+        return DEFAULT_WORKER_SETTINGS.copy()
+    # Merge with defaults to ensure all keys exist
+    return {**DEFAULT_WORKER_SETTINGS, **settings}
+
+
+async def get_enrichment_settings_with_defaults(pool: Pool) -> Dict[str, Any]:
+    """Get enrichment settings with fallback to defaults."""
+    settings = await get_setting(pool, ENRICHMENT_SETTINGS_KEY)
+    if settings is None:
+        return DEFAULT_ENRICHMENT_SETTINGS.copy()
+    return {**DEFAULT_ENRICHMENT_SETTINGS, **settings}
+
+
+async def get_remeasurement_settings_with_defaults(pool: Pool) -> Dict[str, Any]:
+    """Get remeasurement settings with fallback to defaults."""
+    settings = await get_setting(pool, REMEASUREMENT_SETTINGS_KEY)
+    if settings is None:
+        return DEFAULT_REMEASUREMENT_SETTINGS.copy()
+    return {**DEFAULT_REMEASUREMENT_SETTINGS, **settings}
+
+
+async def apply_cache_settings(pool: Pool) -> None:
+    """
+    Apply cache TTL settings from database to enrichment modules.
+    
+    Call this during service startup to configure cache TTLs based on
+    database settings rather than hardcoded values.
+    """
+    settings = await get_enrichment_settings_with_defaults(pool)
+    
+    cache_ttl = settings.get("cache_ttl_seconds", 3600)
+    peeringdb_ttl = settings.get("peeringdb_cache_ttl_seconds", 86400)
+    
+    # Import and configure cache TTLs
+    try:
+        from cyberWatch.enrichment.asn_lookup import set_cache_ttl as set_asn_ttl
+        set_asn_ttl(cache_ttl)
+    except ImportError:
+        pass
+    
+    try:
+        from cyberWatch.enrichment.external_sources import set_cache_ttl as set_external_ttl
+        set_external_ttl(cache_ttl)
+    except ImportError:
+        pass
+    
+    try:
+        from cyberWatch.enrichment.peeringdb import set_cache_ttl as set_peeringdb_ttl
+        set_peeringdb_ttl(peeringdb_ttl)
+    except ImportError:
+        pass
+    
+    logger.info(
+        "Cache settings applied",
+        extra={
+            "asn_cache_ttl": cache_ttl,
+            "peeringdb_cache_ttl": peeringdb_ttl,
+            "action": "cache_settings_applied",
+        }
+    )

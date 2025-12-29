@@ -11,7 +11,7 @@ from asyncpg import Pool
 from cyberWatch.db import pg
 from cyberWatch.enrichment.peeringdb import fetch_asn_org
 from cyberWatch.logging_config import get_logger
-from cyberWatch.scheduler.queue import Queue, TargetTask
+from cyberWatch.scheduler.queue import TargetQueue, TargetTask
 
 logger = get_logger("asn_expander")
 
@@ -119,7 +119,7 @@ async def sample_ips_from_prefix(prefix: str, max_samples: int = 5) -> List[str]
 
 async def expand_asn(
     pool: Pool,
-    queue: Queue,
+    queue: TargetQueue,
     asn: int,
     config: AsnExpanderConfig,
 ) -> int:
@@ -197,7 +197,7 @@ async def expand_asn(
 
 async def run_once(
     pool: Pool,
-    queue: Queue,
+    queue: TargetQueue,
     config: AsnExpanderConfig,
 ) -> int:
     """

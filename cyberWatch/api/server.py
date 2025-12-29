@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from cyberWatch.api.routes import measurements, traceroute, targets, asn, graph, dns, health, settings
 from cyberWatch.api.utils import db
 from cyberWatch.db.settings import ensure_settings_table
-from cyberWatch.logging_config import setup_logging
+from cyberWatch.logging_config import setup_logging, set_request_id, reset_request_id
 
 logger = setup_logging("api")
 
@@ -30,9 +30,12 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next: Callable) -> Response:
-    """Log all HTTP requests with timing and outcome."""
+    """Log all HTTP requests with timing and outcome. Propagates request_id via contextvars."""
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
+    
+    # Set request ID in contextvars for propagation to all downstream logging
+    token = set_request_id(request_id)
     
     start_time = time.time()
     
@@ -85,6 +88,9 @@ async def log_requests(request: Request, call_next: Callable) -> Response:
             }
         )
         raise
+    finally:
+        # Reset request ID context to avoid leaking to other requests
+        reset_request_id(token)
 
 
 @app.exception_handler(Exception)

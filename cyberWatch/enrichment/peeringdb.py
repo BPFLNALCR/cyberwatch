@@ -9,11 +9,24 @@ import aiohttp
 from pydantic import BaseModel
 
 from cyberWatch.logging_config import get_logger
+from cyberWatch.enrichment import get_circuit_breaker
 
 logger = get_logger("peeringdb")
 
-CACHE_TTL_SECONDS = 86400
+# Default cache TTL (24 hours for PeeringDB data which changes slowly)
+DEFAULT_CACHE_TTL_SECONDS = 86400
+_cache_ttl: float = DEFAULT_CACHE_TTL_SECONDS
 API_ROOT = "https://www.peeringdb.com/api"
+
+# Circuit breaker for PeeringDB
+_peeringdb_breaker = get_circuit_breaker("peeringdb", failure_threshold=3, recovery_time=300.0)
+
+
+def set_cache_ttl(ttl_seconds: float) -> None:
+    """Set the cache TTL for PeeringDB lookups. Called from settings initialization."""
+    global _cache_ttl
+    _cache_ttl = ttl_seconds
+    logger.debug(f"PeeringDB cache TTL set to {ttl_seconds}s", extra={"cache_ttl": ttl_seconds})
 
 
 class AsnOrg(BaseModel):
@@ -39,7 +52,7 @@ def _cache_get(asn: int) -> Optional[AsnOrg]:
     if not entry:
         return None
     ts, val = entry
-    if time.time() - ts > CACHE_TTL_SECONDS:
+    if time.time() - ts > _cache_ttl:
         _cache.pop(asn, None)
         return None
     return val
@@ -60,7 +73,19 @@ async def fetch_asn_org(asn: int) -> AsnOrg:
     """Fetch comprehensive ASN metadata from PeeringDB."""
     cached = _cache_get(asn)
     if cached:
+        logger.debug(
+            f"PeeringDB cache hit for AS{asn}",
+            extra={"asn": asn, "outcome": "cache_hit"}
+        )
         return cached
+
+    # Check circuit breaker
+    if _peeringdb_breaker.is_open():
+        logger.debug(
+            f"PeeringDB circuit open, skipping lookup for AS{asn}",
+            extra={"asn": asn, "circuit": "peeringdb", "outcome": "circuit_open"}
+        )
+        return AsnOrg(asn=asn, org_name=None, country=None)
 
     session = await _get_session()
     url = f"{API_ROOT}/net"
@@ -76,6 +101,7 @@ async def fetch_asn_org(asn: int) -> AsnOrg:
     prefixes_v4: List[str] = []
     prefixes_v6: List[str] = []
 
+    start_time = time.time()
     try:
         async with session.get(url, params=params, timeout=15) as resp:
             if resp.status == 200:
@@ -104,34 +130,46 @@ async def fetch_asn_org(asn: int) -> AsnOrg:
                         if v6:
                             prefixes_v6.append(v6)
                     
+                    _peeringdb_breaker.record_success()
+                    duration_ms = round((time.time() - start_time) * 1000, 2)
                     logger.info(
                         f"Fetched PeeringDB data for AS{asn}",
                         extra={
                             "asn": asn,
                             "org_name": org_name,
                             "facility_count": facility_count,
+                            "duration": duration_ms,
                             "outcome": "success"
                         }
                     )
+                else:
+                    # No records found (ASN not in PeeringDB)
+                    logger.debug(
+                        f"No PeeringDB data for AS{asn}",
+                        extra={"asn": asn, "outcome": "not_found"}
+                    )
             else:
+                _peeringdb_breaker.record_failure()
                 logger.warning(
                     f"PeeringDB returned status {resp.status} for AS{asn}",
-                    extra={"asn": asn, "status": resp.status}
+                    extra={"asn": asn, "status": resp.status, "outcome": "http_error"}
                 )
     except asyncio.TimeoutError:
+        _peeringdb_breaker.record_failure()
         logger.warning(
             f"PeeringDB timeout for AS{asn}",
             extra={"asn": asn, "outcome": "timeout"}
         )
     except Exception as exc:
+        _peeringdb_breaker.record_failure()
         logger.error(
             f"PeeringDB fetch failed for AS{asn}: {str(exc)}",
             exc_info=True,
-            extra={"asn": asn, "outcome": "error"}
+            extra={"asn": asn, "outcome": "error", "error_type": type(exc).__name__}
         )
 
     # Fetch additional prefix data from /netixlan endpoint if needed
-    if not prefixes_v4 and not prefixes_v6:
+    if not prefixes_v4 and not prefixes_v6 and not _peeringdb_breaker.is_open():
         try:
             prefix_url = f"{API_ROOT}/netixlan"
             prefix_params = {"asn": asn}
@@ -146,8 +184,22 @@ async def fetch_asn_org(asn: int) -> AsnOrg:
                             prefixes_v4.append(v4)
                         if v6 and v6 not in prefixes_v6:
                             prefixes_v6.append(v6)
-        except Exception:
-            pass  # Non-critical
+                    if records:
+                        logger.debug(
+                            f"Fetched {len(records)} netixlan records for AS{asn}",
+                            extra={"asn": asn, "records": len(records)}
+                        )
+        except asyncio.TimeoutError:
+            logger.debug(
+                f"PeeringDB netixlan timeout for AS{asn} (non-critical)",
+                extra={"asn": asn, "outcome": "timeout"}
+            )
+        except Exception as exc:
+            # Non-critical: log at debug level instead of silently swallowing
+            logger.debug(
+                f"PeeringDB netixlan fetch failed for AS{asn}: {str(exc)} (non-critical)",
+                extra={"asn": asn, "outcome": "error", "error_type": type(exc).__name__}
+            )
 
     org = AsnOrg(
         asn=asn,
