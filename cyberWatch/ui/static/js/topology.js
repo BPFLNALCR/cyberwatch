@@ -17,13 +17,13 @@ const state = {
 
 // Force simulation parameters
 const physics = {
-  repulsion: 20000,       // Strong repulsion to prevent overlap
-  attraction: 0.006,      // Weaker attraction for more spacing
-  damping: 0.80,          // More damping for stability
-  centerPull: 0.003,      // Slight center pull to keep graph together
-  minDistance: 340,       // Cards are ~200px wide, need more space
-  maxVelocity: 8,         // Slower movement for stability
-  cardWidth: 200,         // Card dimensions for collision
+  repulsion: 50000,       // Very strong repulsion
+  attraction: 0.003,      // Weak attraction
+  damping: 0.75,          // Lower damping = forces apply more
+  centerPull: 0.002,      // Gentle center pull
+  minDistance: 280,       // Minimum center-to-center distance
+  maxVelocity: 15,        // Allow faster movement for separation
+  cardWidth: 200,         // Card dimensions
   cardHeight: 150,
 };
 
@@ -480,7 +480,7 @@ function startSimulation() {
   }
   
   let iterations = 0;
-  const maxIterations = 300;
+  const maxIterations = 500;  // More iterations to ensure proper separation
   
   simulationInterval = setInterval(() => {
     applyForces();
@@ -505,23 +505,45 @@ function applyForces() {
     node.fy = 0;
   });
   
-  // Repulsion between all nodes with box collision awareness
+  // Hard collision separation - cards must not overlap
+  // Card dimensions with padding
+  const cardW = physics.cardWidth + 40;  // 240px total width with gap
+  const cardH = physics.cardHeight + 30; // 180px total height with gap
+  
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const dx = nodes[j].x - nodes[i].x;
       const dy = nodes[j].y - nodes[i].y;
-      const distSq = dx * dx + dy * dy;
-      const dist = Math.sqrt(distSq) || 1;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
       
-      // Calculate overlap based on card dimensions
-      const overlapX = physics.cardWidth - Math.abs(dx);
-      const overlapY = physics.cardHeight - Math.abs(dy);
-      const isOverlapping = overlapX > 0 && overlapY > 0;
+      // Check if cards overlap (AABB collision)
+      const overlapX = cardW - absDx;
+      const overlapY = cardH - absDy;
       
-      if (dist < physics.minDistance || isOverlapping) {
-        // Stronger force when overlapping
-        const multiplier = isOverlapping ? 3 : 1;
-        const force = (physics.repulsion * multiplier) / (distSq + 100);
+      if (overlapX > 0 && overlapY > 0) {
+        // Cards are overlapping - apply strong separation force
+        // Push apart along the axis of least overlap
+        const pushX = overlapX / 2 + 10;
+        const pushY = overlapY / 2 + 10;
+        
+        if (overlapX < overlapY) {
+          // Separate horizontally
+          const dirX = dx >= 0 ? 1 : -1;
+          nodes[i].fx -= dirX * pushX * 0.5;
+          nodes[j].fx += dirX * pushX * 0.5;
+        } else {
+          // Separate vertically
+          const dirY = dy >= 0 ? 1 : -1;
+          nodes[i].fy -= dirY * pushY * 0.5;
+          nodes[j].fy += dirY * pushY * 0.5;
+        }
+      }
+      
+      // General repulsion to maintain spacing
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      if (dist < physics.minDistance) {
+        const force = physics.repulsion / (dist * dist + 1);
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
         
@@ -533,7 +555,7 @@ function applyForces() {
     }
   }
   
-  // Attraction along edges
+  // Attraction along edges - only when far enough apart
   state.edges.forEach(edge => {
     const source = nodes.find(n => n.asn === edge.source);
     const target = nodes.find(n => n.asn === edge.target);
@@ -543,9 +565,10 @@ function applyForces() {
       const dy = target.y - source.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
       
-      // Only attract if beyond minimum distance
-      if (dist > physics.minDistance * 0.8) {
-        const force = (dist - physics.minDistance * 0.7) * physics.attraction;
+      // Only attract if beyond safe distance (no overlap risk)
+      const safeDistance = Math.max(cardW, cardH) * 1.2;
+      if (dist > safeDistance) {
+        const force = (dist - safeDistance) * physics.attraction;
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
         
