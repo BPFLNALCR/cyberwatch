@@ -17,12 +17,14 @@ const state = {
 
 // Force simulation parameters
 const physics = {
-  repulsion: 8000,
-  attraction: 0.01,
-  damping: 0.85,
-  centerPull: 0.002,
-  minDistance: 250,
-  maxVelocity: 10,
+  repulsion: 20000,       // Strong repulsion to prevent overlap
+  attraction: 0.006,      // Weaker attraction for more spacing
+  damping: 0.80,          // More damping for stability
+  centerPull: 0.003,      // Slight center pull to keep graph together
+  minDistance: 340,       // Cards are ~200px wide, need more space
+  maxVelocity: 8,         // Slower movement for stability
+  cardWidth: 200,         // Card dimensions for collision
+  cardHeight: 150,
 };
 
 // DOM elements
@@ -226,6 +228,10 @@ function createASNCard(node) {
   const trafficRatio = (node.measurement_count || 0) / state.maxTraffic;
   const intensity = Math.max(0.3, trafficRatio);
   
+  // Get neighbors for this node
+  const neighbors = getNodeNeighbors(node.asn);
+  const neighborCount = neighbors.length;
+  
   card.innerHTML = `
     <div class="cw-asn-card-header">
       <span class="cw-asn-number">AS${node.asn}</span>
@@ -245,12 +251,20 @@ function createASNCard(node) {
       ` : ''}
       <div class="cw-metric-row">
         <span class="cw-metric-label">Neighbors:</span>
-        <span class="cw-metric-value">${node.neighbor_count || 0}</span>
+        <span class="cw-metric-value">${neighborCount}</span>
       </div>
     </div>
     <div class="cw-traffic-bar">
       <div class="cw-traffic-fill" style="width: ${trafficRatio * 100}%; opacity: ${intensity}"></div>
     </div>
+    ${neighborCount > 0 ? `
+    <div class="cw-neighbor-indicators" data-asn="${node.asn}">
+      ${neighbors.slice(0, 6).map((n, i) => `
+        <div class="cw-neighbor-dot" data-neighbor="${n}" title="AS${n}" style="--dot-index: ${i}"></div>
+      `).join('')}
+      ${neighborCount > 6 ? `<span class="cw-neighbor-more">+${neighborCount - 6}</span>` : ''}
+    </div>
+    ` : ''}
   `;
   
   // Click handler
@@ -260,6 +274,19 @@ function createASNCard(node) {
   });
   
   return card;
+}
+
+// Helper to get neighbors for a specific ASN
+function getNodeNeighbors(asn) {
+  const neighbors = [];
+  state.edges.forEach(edge => {
+    if (edge.source === asn && !neighbors.includes(edge.target)) {
+      neighbors.push(edge.target);
+    } else if (edge.target === asn && !neighbors.includes(edge.source)) {
+      neighbors.push(edge.source);
+    }
+  });
+  return neighbors;
 }
 
 function selectNode(node) {
@@ -478,7 +505,7 @@ function applyForces() {
     node.fy = 0;
   });
   
-  // Repulsion between all nodes
+  // Repulsion between all nodes with box collision awareness
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
       const dx = nodes[j].x - nodes[i].x;
@@ -486,8 +513,15 @@ function applyForces() {
       const distSq = dx * dx + dy * dy;
       const dist = Math.sqrt(distSq) || 1;
       
-      if (dist < physics.minDistance) {
-        const force = physics.repulsion / distSq;
+      // Calculate overlap based on card dimensions
+      const overlapX = physics.cardWidth - Math.abs(dx);
+      const overlapY = physics.cardHeight - Math.abs(dy);
+      const isOverlapping = overlapX > 0 && overlapY > 0;
+      
+      if (dist < physics.minDistance || isOverlapping) {
+        // Stronger force when overlapping
+        const multiplier = isOverlapping ? 3 : 1;
+        const force = (physics.repulsion * multiplier) / (distSq + 100);
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
         
@@ -509,14 +543,17 @@ function applyForces() {
       const dy = target.y - source.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
       
-      const force = dist * physics.attraction;
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
-      
-      source.fx += fx;
-      source.fy += fy;
-      target.fx -= fx;
-      target.fy -= fy;
+      // Only attract if beyond minimum distance
+      if (dist > physics.minDistance * 0.8) {
+        const force = (dist - physics.minDistance * 0.7) * physics.attraction;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        
+        source.fx += fx;
+        source.fy += fy;
+        target.fx -= fx;
+        target.fy -= fy;
+      }
     }
   });
   

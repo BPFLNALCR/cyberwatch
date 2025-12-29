@@ -822,17 +822,51 @@ body {
 	box-shadow: 0 0 8px rgba(124, 243, 255, 0.6);
 }
 
+/* Neighbor connection indicators */
+.cw-neighbor-indicators {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-top: 0.5rem;
+	padding-top: 0.5rem;
+	border-top: 1px solid rgba(255, 255, 255, 0.08);
+	flex-wrap: wrap;
+}
+
+.cw-neighbor-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: linear-gradient(135deg, #7cf3ff, #9f7fff);
+	opacity: 0.7;
+	cursor: pointer;
+	transition: all 0.2s ease;
+	box-shadow: 0 0 4px rgba(124, 243, 255, 0.4);
+}
+
+.cw-neighbor-dot:hover {
+	opacity: 1;
+	transform: scale(1.5);
+	box-shadow: 0 0 10px rgba(124, 243, 255, 0.8);
+}
+
+.cw-neighbor-more {
+	font-size: 0.65rem;
+	color: #8aa5c1;
+	margin-left: 2px;
+}
+
 /* SVG edges */
 .cw-edge {
 	stroke: url(#edge-gradient);
-	stroke-width: 1;
+	stroke-width: 2;
 	fill: none;
-	opacity: 0.4;
+	opacity: 0.5;
 	transition: all 0.3s ease;
 }
 
 .cw-edge.highlight {
-	stroke-width: 3;
+	stroke-width: 4;
 	opacity: 1;
 	filter: url(#glow);
 }
