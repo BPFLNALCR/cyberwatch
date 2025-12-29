@@ -1247,6 +1247,31 @@ body {
 	color: #ffd7d7;
 }
 
+/* Debug details for troubleshooting */
+.cw-debug-details {
+	margin-top: 1rem;
+	text-align: left;
+	width: 100%;
+	max-width: 600px;
+}
+.cw-debug-details summary {
+	cursor: pointer;
+	color: #7cf3ff;
+	font-size: 0.85rem;
+}
+.cw-debug-pre {
+	background: rgba(0, 0, 0, 0.4);
+	padding: 1rem;
+	border-radius: 8px;
+	font-size: 0.75rem;
+	white-space: pre-wrap;
+	word-break: break-word;
+	margin-top: 0.5rem;
+	color: #c8d8e8;
+	max-height: 300px;
+	overflow-y: auto;
+}
+
 /* Individual hop card */
 .cw-hop-card {
 	display: flex;
