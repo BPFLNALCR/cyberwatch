@@ -503,9 +503,12 @@ body {
    Graph Topology Visualization Styles
    ============================================ */
 
-/* Graph page layout - hide the default cw-page wrapper */
+/* Graph page layout - make cw-page a transparent full-width container */
 .cw-graph-page .cw-page {
-	display: none;
+	max-width: none;
+	margin: 0;
+	padding: 0;
+	display: block;
 }
 
 /* Main graph container - full viewport layout */
