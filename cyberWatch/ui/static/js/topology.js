@@ -485,32 +485,43 @@ function startSimulation() {
     clearInterval(simulationInterval);
   }
   
+  // First, resolve any initial overlaps before animation starts
+  resolveAllOverlaps();
+  
   let iterations = 0;
-  const maxIterations = 500;  // More iterations to ensure proper separation
+  const maxIterations = 200;
   
   simulationInterval = setInterval(() => {
+    // Apply gentle movement forces
     applyForces();
+    
+    // CRITICAL: Resolve overlaps as hard constraint AFTER movement
+    resolveAllOverlaps();
+    
+    // Update DOM
     updatePositions();
     
     iterations++;
     if (iterations >= maxIterations) {
       clearInterval(simulationInterval);
       simulationInterval = null;
-      // Center the graph after simulation settles
+      // Final overlap check and center
+      resolveAllOverlaps();
       resetTransform();
     }
-  }, 16); // ~60fps
+  }, 16);
 }
 
-function applyForces() {
+// Resolves ALL overlaps - runs until no cards overlap
+function resolveAllOverlaps() {
   const nodes = state.nodes;
-  
-  // Required separation distances (card size + padding)
   const minSepX = physics.cardWidth + physics.padding;
   const minSepY = physics.cardHeight + physics.padding;
   
-  // Direct collision resolution - run multiple passes
-  for (let pass = 0; pass < 3; pass++) {
+  // Run multiple passes until stable (max 20 to prevent infinite loop)
+  for (let pass = 0; pass < 20; pass++) {
+    let hadOverlap = false;
+    
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const dx = nodes[j].x - nodes[i].x;
@@ -518,40 +529,49 @@ function applyForces() {
         const absDx = Math.abs(dx);
         const absDy = Math.abs(dy);
         
-        // Check if cards overlap
         const overlapX = minSepX - absDx;
         const overlapY = minSepY - absDy;
         
+        // Cards overlap if BOTH x and y distances are less than required
         if (overlapX > 0 && overlapY > 0) {
-          // Cards are overlapping - directly adjust positions
-          // Choose axis with less overlap to minimize movement
+          hadOverlap = true;
+          
+          // Push apart - choose direction that requires less movement
           if (overlapX < overlapY) {
-            // Push apart horizontally
-            const push = (overlapX / 2) + 5;
-            if (dx >= 0) {
-              nodes[i].x -= push;
-              nodes[j].x += push;
-            } else {
-              nodes[i].x += push;
-              nodes[j].x -= push;
-            }
+            // Separate horizontally
+            const push = (overlapX / 2) + 2;
+            const dirX = dx >= 0 ? 1 : -1;
+            nodes[i].x -= dirX * push;
+            nodes[j].x += dirX * push;
           } else {
-            // Push apart vertically
-            const push = (overlapY / 2) + 5;
-            if (dy >= 0) {
-              nodes[i].y -= push;
-              nodes[j].y += push;
-            } else {
-              nodes[i].y += push;
-              nodes[j].y -= push;
-            }
+            // Separate vertically  
+            const push = (overlapY / 2) + 2;
+            const dirY = dy >= 0 ? 1 : -1;
+            nodes[i].y -= dirY * push;
+            nodes[j].y += dirY * push;
           }
+          
+          // Kill velocity to prevent re-overlap
+          nodes[i].vx = 0;
+          nodes[i].vy = 0;
+          nodes[j].vx = 0;
+          nodes[j].vy = 0;
         }
       }
     }
+    
+    // If no overlaps found, we're done
+    if (!hadOverlap) break;
   }
+}
+
+function applyForces() {
+  const nodes = state.nodes;
+  const minSepX = physics.cardWidth + physics.padding;
+  const minSepY = physics.cardHeight + physics.padding;
+  const idealDist = Math.sqrt(minSepX * minSepX + minSepY * minSepY);
   
-  // Gentle edge attraction (pull connected nodes closer, but not overlapping)
+  // Very gentle edge attraction - only pull if VERY far apart
   state.edges.forEach(edge => {
     const source = nodes.find(n => n.asn === edge.source);
     const target = nodes.find(n => n.asn === edge.target);
@@ -561,10 +581,9 @@ function applyForces() {
       const dy = target.y - source.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       
-      // Only attract if far apart and won't cause overlap
-      const minDist = Math.sqrt(minSepX * minSepX + minSepY * minSepY);
-      if (dist > physics.edgeLength) {
-        const pull = (dist - physics.edgeLength) * 0.02;
+      // Only attract if nodes are more than 1.5x ideal distance apart
+      if (dist > idealDist * 1.5) {
+        const pull = (dist - idealDist * 1.5) * 0.005;  // Very weak
         const nx = dx / dist;
         const ny = dy / dist;
         
@@ -576,10 +595,16 @@ function applyForces() {
     }
   });
   
-  // Apply velocity with damping
+  // Apply velocity with strong damping
   nodes.forEach(node => {
-    node.vx = (node.vx || 0) * physics.damping;
-    node.vy = (node.vy || 0) * physics.damping;
+    node.vx = (node.vx || 0) * 0.8;
+    node.vy = (node.vy || 0) * 0.8;
+    
+    // Clamp velocity
+    const maxV = 5;
+    node.vx = Math.max(-maxV, Math.min(maxV, node.vx));
+    node.vy = Math.max(-maxV, Math.min(maxV, node.vy));
+    
     node.x += node.vx;
     node.y += node.vy;
   });

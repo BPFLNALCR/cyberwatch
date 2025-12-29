@@ -503,6 +503,11 @@ body {
    Graph Topology Visualization Styles
    ============================================ */
 
+/* Graph page layout - hide the default cw-page wrapper */
+.cw-graph-page .cw-page {
+	display: none;
+}
+
 /* Main graph container - full viewport layout */
 .cw-graph-container {
 	display: grid;

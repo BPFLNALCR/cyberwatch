@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
+{% block bodyclass %} class="cw-graph-page"{% endblock %}
+
 {% block content %}
-</main>
-<!-- Close the default cw-page main container and create our own full-viewport layout -->
 
 <div class="cw-graph-container">
   <!-- Sidebar with controls and filters -->
@@ -127,9 +127,6 @@
     </div>
   </aside>
 </div>
-
-<main class="cw-page" style="display: none;">
-<!-- Reopen the main container for base.html structure -->
 {% endblock %}
 
 {% block scripts %}
