@@ -35,6 +35,61 @@ from cyberWatch.logging_config import get_logger
 install_rich_traceback()
 console = Console()
 logger = get_logger("collector")
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+DNS_STORE_CLIENT_IPS_ENV = "CYBERWATCH_DNS_STORE_CLIENT_IPS"
+
+
+def _env_bool(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    normalized = raw.strip().lower()
+    if normalized in TRUE_ENV_VALUES:
+        return True
+    if normalized in FALSE_ENV_VALUES:
+        return False
+    logger.warning(
+        "Ignoring invalid boolean environment value",
+        extra={"env_var": name, "value": raw, "outcome": "invalid_config"},
+    )
+    return None
+
+
+def dns_client_ip_storage_enabled(cfg: DNSCollectorConfig) -> bool:
+    """Return whether new DNS ingestion should persist client IP fields."""
+    env_value = _env_bool(DNS_STORE_CLIENT_IPS_ENV)
+    if env_value is not None:
+        return env_value
+    return cfg.privacy.store_client_ips
+
+
+def client_ip_for_storage(cfg: DNSCollectorConfig, client_ip: Optional[str]) -> Optional[str]:
+    """Apply DNS privacy policy to a client IP before persistence."""
+    if dns_client_ip_storage_enabled(cfg):
+        return client_ip
+    return None
+
+
+def dns_query_record_for_storage(cfg: DNSCollectorConfig, query: DNSQuery) -> DNSQueryRecord:
+    return DNSQueryRecord(
+        domain=query.domain,
+        client_ip=client_ip_for_storage(cfg, query.client_ip),
+        qtype=query.qtype,
+        queried_at=query.timestamp,
+    )
+
+
+def dns_target_record_for_storage(cfg: DNSCollectorConfig, item: ResolvedTarget) -> DNSTargetRecord:
+    return DNSTargetRecord(
+        domain=item.domain,
+        ip=str(item.ip),
+        first_seen=item.queried_at,
+        last_seen=item.queried_at,
+        query_count=1,
+        last_client_ip=client_ip_for_storage(cfg, item.client_ip),
+        last_qtype=item.qtype,
+    )
 
 
 async def resolve_domain(
@@ -196,15 +251,7 @@ async def process_cycle(
 
     await insert_dns_queries(
         pool,
-        [
-            DNSQueryRecord(
-                domain=q.domain,
-                client_ip=q.client_ip,
-                qtype=q.qtype,
-                queried_at=q.timestamp,
-            )
-            for q in filtered
-        ],
+        [dns_query_record_for_storage(cfg, q) for q in filtered],
     )
 
     resolved = await _resolve_batch(cfg, filtered)
@@ -212,17 +259,7 @@ async def process_cycle(
     target_records: List[DNSTargetRecord] = []
     enqueue_candidates: List[ResolvedTarget] = []
     for item in resolved:
-        target_records.append(
-            DNSTargetRecord(
-                domain=item.domain,
-                ip=str(item.ip),
-                first_seen=item.queried_at,
-                last_seen=item.queried_at,
-                query_count=1,
-                last_client_ip=item.client_ip,
-                last_qtype=item.qtype,
-            )
-        )
+        target_records.append(dns_target_record_for_storage(cfg, item))
         enqueue_candidates.append(item)
 
     await upsert_dns_targets(pool, target_records)

@@ -34,6 +34,10 @@ class DNSResolutionConfig(BaseModel):
     max_ips_per_domain: int = Field(default=4, ge=1)
 
 
+class DNSPrivacyConfig(BaseModel):
+    store_client_ips: bool = Field(default=False)
+
+
 class DNSCollectorConfig(BaseModel):
     enabled: bool = Field(default=True)
     source: Literal["pihole", "logfile"] = Field(default="pihole")
@@ -41,6 +45,7 @@ class DNSCollectorConfig(BaseModel):
     logfile: LogFileConfig = Field(default_factory=LogFileConfig)
     filters: FilterConfig = Field(default_factory=FilterConfig)
     dns_resolution: DNSResolutionConfig = Field(default_factory=DNSResolutionConfig)
+    privacy: DNSPrivacyConfig = Field(default_factory=DNSPrivacyConfig)
 
     @classmethod
     def load(cls, path: str) -> "DNSCollectorConfig":

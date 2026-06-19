@@ -71,6 +71,7 @@ queue = TargetQueue()
 await queue.enqueue(TargetTask(target_ip="1.1.1.1", source="api"))
 task = await queue.dequeue(timeout=5)
 ```
+Do not silently fall back to the older mixed-case `cyberWatch:targets` key. Operators should drain or move old queued items manually if a deployment still has them.
 
 ### Pydantic Models
 All API request/response models in `cyberWatch/api/models.py`. Wrap responses with `ok()` helper:
@@ -126,6 +127,8 @@ grep '"outcome":"error"' logs/cyberwatch.jsonl | jq '.'
 | `NEO4J_URI` | Neo4j bolt URI | `bolt://localhost:7687` |
 | `CYBERWATCH_LOG_LEVEL` | Log level | `INFO` |
 | `CYBERWATCH_API_BASE` | API URL for UI | `http://localhost:8000` |
+| `CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS` | Enable destructive clear endpoints | `false` |
+| `CYBERWATCH_DNS_STORE_CLIENT_IPS` | Persist DNS client IP fields for new ingestion | `false` |
 
 ## Adding New Features
 
@@ -138,7 +141,10 @@ grep '"outcome":"error"' logs/cyberwatch.jsonl | jq '.'
 ## Testing
 
 ```bash
-# Run logging tests
+# Run unit/import smoke tests without live services
+python -m pytest
+
+# Optional manual logging check
 python test_logging.py
 
 # API health check
@@ -164,9 +170,16 @@ dns_resolution:
   enabled: true            # Resolve domains to IPs before enqueuing
   timeout_seconds: 2
   max_ips_per_domain: 4    # Limit IPs per domain (A/AAAA records)
+
+privacy:
+  store_client_ips: false  # Default: do not persist DNS client IP fields
 ```
 
 **Pi-hole sources**: Set `source: "pihole"` with `base_url` + `api_token`, or `source: "logfile"` to tail `/var/log/pihole.log`.
+
+**Destructive endpoints**: `/settings/clear-*` routes are disabled unless `CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS=true` is set. Keep the default off for normal development.
+
+**DNS privacy**: DNS client IPs are available for `ignore_clients` filtering before storage, but new ingestion stores `NULL` client fields unless `CYBERWATCH_DNS_STORE_CLIENT_IPS=true` or `privacy.store_client_ips: true` is explicitly configured for lab use.
 
 ## Install/Uninstall Scripts
 

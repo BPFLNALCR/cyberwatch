@@ -44,8 +44,15 @@ dns_resolution:
   timeout_seconds: 2
   max_ips_per_domain: 4
 
+# Privacy settings for newly ingested DNS data.
+# Client IPs are still available to ignore_clients filtering before storage,
+# but are not persisted unless explicitly enabled for a trusted lab deployment.
+privacy:
+  store_client_ips: false
+
 # Logging Configuration (Environment Variables)
 # These can be set in systemd unit files or shell environment
 # CYBERWATCH_LOG_LEVEL: INFO|DEBUG|WARNING|ERROR|CRITICAL (default: INFO)
 # CYBERWATCH_LOG_FILE: Path to JSONL log file (default: logs/cyberwatch.jsonl)
 # CYBERWATCH_LOG_MAX_BYTES: Max bytes per log file before rotation (default: 104857600 = 100MB)
+# CYBERWATCH_DNS_STORE_CLIENT_IPS: true to persist DNS client IP fields (default: false)

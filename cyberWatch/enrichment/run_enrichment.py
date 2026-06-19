@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 
 from rich.console import Console
 from neo4j.exceptions import ServiceUnavailable, AuthError
 
 from cyberWatch.db import pg
 from cyberWatch.db.neo4j import get_driver
-from cyberWatch.enrichment import enricher, graph_builder
+from cyberWatch.db.settings import get_enrichment_settings_with_defaults
+from cyberWatch.enrichment import asn_expander, enricher, graph_builder
 from cyberWatch.logging_config import get_logger
+from cyberWatch.scheduler.queue import TargetQueue
 
 console = Console()
 logger = get_logger("enrichment")
@@ -75,6 +78,9 @@ async def main() -> None:
     pg_dsn = os.getenv("CYBERWATCH_PG_DSN", "postgresql://postgres:postgres@localhost:5432/cyberWatch")
     redis_url = os.getenv("CYBERWATCH_REDIS_URL", "redis://localhost:6379/0")
     sleep_seconds = int(os.getenv("CYBERWATCH_ENRICH_INTERVAL", "10"))
+    pool = None
+    queue = None
+    driver = None
 
     logger.info(
         "Enrichment scheduler starting",
@@ -85,37 +91,31 @@ async def main() -> None:
         }
     )
     console.print("[cyan]Starting enrichment scheduler")
-    
-    pool = await pg.create_pool(pg_dsn)
-    queue = Queue(redis_url)
-    
-    # Initialize Neo4j with retry logic
+
     try:
-        driver = await get_neo4j_driver_with_retry(max_retries=5, initial_delay=2.0)
-    except Exception as exc:
-        logger.error(
-            f"Failed to initialize Neo4j driver: {exc}",
-            exc_info=True,
-            extra={"outcome": "fatal_error"}
-        )
-        console.print("[red]ERROR: Could not connect to Neo4j. Graph building will be disabled.")
-        console.print("[yellow]Run ASN enrichment will continue, but graph features won't work.")
-        console.print("[yellow]Check Neo4j service: sudo systemctl status neo4j")
-        driver = None
-    
-    # Track ASN expansion timing
-    last_asn_expansion = datetime.utcnow()
-    
-    try:
+        pool = await pg.create_pool(pg_dsn)
+        queue = TargetQueue(redis_url)
+
+        # Initialize Neo4j with retry logic
+        try:
+            driver = await get_neo4j_driver_with_retry(max_retries=5, initial_delay=2.0)
+        except Exception as exc:
+            logger.error(
+                f"Failed to initialize Neo4j driver: {exc}",
+                exc_info=True,
+                extra={"outcome": "fatal_error"}
+            )
+            console.print("[red]ERROR: Could not connect to Neo4j. Graph building will be disabled.")
+            console.print("[yellow]Run ASN enrichment will continue, but graph features won't work.")
+            console.print("[yellow]Check Neo4j service: sudo systemctl status neo4j")
+            driver = None
+
+        # Track ASN expansion timing
+        last_asn_expansion = datetime.utcnow()
+
         while True:
             # Load settings
-            settings = await get_enrichment_settings(pool) or {
-                "poll_interval_seconds": 10,
-                "asn_expansion_enabled": True,
-                "asn_expansion_interval_minutes": 60,
-                "asn_min_neighbor_count": 5,
-                "asn_max_ips_per_asn": 10,
-            }
+            settings = await get_enrichment_settings_with_defaults(pool)
             
             enriched = await enricher.run_once(pool)
             
@@ -140,12 +140,12 @@ async def main() -> None:
                     logger.info("Running ASN expansion phase")
                     console.print("[cyan]Running ASN expansion...")
                     try:
-                        expander_config = AsnExpanderConfig(
+                        expander_config = asn_expander.AsnExpanderConfig(
                             min_neighbor_count=settings.get("asn_min_neighbor_count", 5),
                             max_ips_per_asn=settings.get("asn_max_ips_per_asn", 10),
                             max_asns_per_run=20,
                         )
-                        expanded = await expand_asns(pool, queue, expander_config)
+                        expanded = await asn_expander.run_once(pool, queue, expander_config)
                         last_asn_expansion = datetime.utcnow()
                         
                         if expanded > 0:
@@ -170,8 +170,10 @@ async def main() -> None:
         )
     finally:
         logger.info("Enrichment scheduler shutting down", extra={"state": "shutdown"})
-        await pool.close()
-        await queue.close()
+        if pool is not None:
+            await pool.close()
+        if queue is not None:
+            await queue.close()
         if driver is not None:
             await driver.close()
         logger.info("Enrichment scheduler stopped", extra={"state": "stopped"})

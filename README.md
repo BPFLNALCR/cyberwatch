@@ -10,6 +10,7 @@ Autonomous internet measurement and topology mapping node.
 - [Data Model \& What cyberWatch Shows You](#data-model--what-cyberwatch-shows-you)
 - [Installation (Debian)](#installation-debian)
 - [Configuration](#configuration)
+- [Testing](#testing)
 - [Running cyberWatch](#running-cyberwatch)
 - [Using the API and UI](#using-the-api-and-ui)
 - [Grafana Dashboards](#grafana-dashboards)
@@ -47,7 +48,7 @@ DNS activity from a local resolver (e.g., Pi-hole) can be turned into measuremen
 **DNS Integration**
 - Optional Pi-hole API or log tail ingestion; filters for suffixes (`.local`, `.lan`), qtypes (PTR), client allow/deny, max domain length.
 - Domains resolved to A/AAAA (configurable max IPs) and **automatically enqueued for traceroute measurement**.
-- Stored in `dns_queries` and `dns_targets` tables with full analytics.
+- Stored in `dns_queries` and `dns_targets` tables with client IP fields omitted by default for new ingestion.
 
 **APIs & Looking Glass**
 - FastAPI service with endpoints for traceroute/MTR, measurements, hops, target enqueue/list, ASN detail (with full enrichment), graph neighbors/path, DNS analytics.
@@ -85,7 +86,7 @@ See [architecture.md](architecture.md) for the full design and phased goals.
 - **Measurements**: `target`, tool used, timestamps, success, raw output, enrichment status, graph build status.
 - **Hops**: hop number, IP, RTT ms, ASN, prefix, org, country (enriched from multiple sources).
 - **ASNs**: Dedicated table with comprehensive metadata - org name, country, neighbor count, prefix count, PeeringDB data (facility count, peering policy, traffic levels, IRR AS-SET), measurement statistics, timestamps.
-- **DNS-derived targets**: domains/IPs with first/last seen, query counts, last client/qtype.
+- **DNS-derived targets**: domains/IPs with first/last seen, query counts, qtype, and optional client fields when explicitly enabled for trusted lab use.
 - **AS graph edges** (Neo4j): AS nodes with org/country, `ROUTE` edges holding observed_count, min/max RTT, last_seen.
 
 How it appears:
@@ -132,6 +133,8 @@ cd cyberwatch
   - `CYBERWATCH_PG_DSN`, `CYBERWATCH_REDIS_URL` (queue), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` for API/enrichment/collector.
   - `CYBERWATCH_API_BASE` for the UI to reach the API.
   - `CYBERWATCH_DNS_CONFIG` to point the collector to a non-default config path.
+  - `CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS=false` keeps destructive settings endpoints disabled unless explicitly enabled by an operator.
+  - `CYBERWATCH_DNS_STORE_CLIENT_IPS=false` keeps DNS client IP fields empty for new ingestion unless explicitly enabled for trusted lab use.
 - **Runtime settings stored in PostgreSQL** (configured during installation, adjustable via SQL or API):
   - **Worker settings** (`worker_settings` key):
     - `rate_limit_per_minute`: Max traceroutes per minute per worker (default: 30)
@@ -166,6 +169,12 @@ WHERE key = 'enrichment_settings';
 sudo systemctl restart 'cyberWatch-worker@*'
 sudo systemctl restart cyberWatch-enrichment
 ```
+
+### Safety and Privacy Defaults
+
+- Destructive settings endpoints (`/settings/clear-measurements`, `/settings/clear-dns`, `/settings/clear-graph`, `/settings/clear-all`) are disabled by default. Set `CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS=true` only when intentionally clearing data.
+- DNS client IPs are not persisted for new ingestion by default. The collector still uses source client IPs for `ignore_clients` filtering before storage, then stores `NULL` for `dns_queries.client_ip` and `dns_targets.last_client_ip` unless `CYBERWATCH_DNS_STORE_CLIENT_IPS=true` or `privacy.store_client_ips: true` is configured.
+- Existing historical DNS rows are not scrubbed by this stabilization behavior. Review or purge historical DNS data separately if needed.
 
 ### Logging Configuration
 cyberWatch includes comprehensive structured logging in JSONL format for all components. Logging is **enabled by default** and can be configured via environment variables:
@@ -228,6 +237,17 @@ grep '"outcome":"error"' logs/cyberwatch.jsonl | grep traceroute | jq '.'
 **Security Note:**
 Sensitive data (passwords, API tokens) is automatically redacted from logs. You'll see `***REDACTED***` in place of these values.
 
+## Testing
+
+Install dependencies and run the default test suite:
+
+```bash
+python -m pip install -r cyberWatch/requirements.txt
+python -m pytest
+```
+
+The pytest suite is designed to run without live PostgreSQL, Redis, Neo4j, Pi-hole, traceroute/scamper, or internet access.
+
 ## Running cyberWatch
 **Systemd (installed by the script)**
 - API: `sudo systemctl status|start|stop cyberWatch-api.service` (FastAPI on port 8000).
@@ -254,6 +274,7 @@ sudo journalctl -u 'cyberWatch-worker@*' -f
 ```bash
 # Check Redis queue depth
 redis-cli LLEN cyberwatch:targets
+# Older cyberWatch:targets entries are not migrated automatically; drain or move them manually if needed.
 
 # View all logs
 sudo journalctl -u 'cyberWatch-*' -f

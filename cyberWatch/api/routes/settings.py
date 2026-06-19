@@ -1,12 +1,13 @@
 """Settings management API endpoints."""
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Optional
 
 import aiohttp
 import asyncpg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from cyberWatch.api.models import ok, err
@@ -22,6 +23,8 @@ from cyberWatch.logging_config import get_logger
 
 logger = get_logger("api")
 router = APIRouter(prefix="/settings", tags=["settings"])
+TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+DESTRUCTIVE_SETTINGS_ENV = "CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS"
 
 
 class PiholeSettingsRequest(BaseModel):
@@ -39,6 +42,33 @@ class PiholeSettingsResponse(BaseModel):
     enabled: bool
     poll_interval_seconds: int
     has_token: bool
+
+
+def destructive_settings_enabled() -> bool:
+    """Return whether destructive settings endpoints are enabled by environment."""
+    return os.getenv(DESTRUCTIVE_SETTINGS_ENV, "").strip().lower() in TRUE_ENV_VALUES
+
+
+def require_destructive_settings_enabled(request_id: str = "unknown") -> None:
+    """Reject destructive settings operations unless explicitly enabled."""
+    if destructive_settings_enabled():
+        return
+    logger.warning(
+        "Destructive settings endpoint blocked by configuration",
+        extra={
+            "request_id": request_id,
+            "action": "destructive_settings_blocked",
+            "outcome": "blocked",
+            "env_var": DESTRUCTIVE_SETTINGS_ENV,
+        },
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            "Destructive settings endpoints are disabled. "
+            f"Set {DESTRUCTIVE_SETTINGS_ENV}=true to enable them."
+        ),
+    )
 
 
 @router.get("/pihole")
@@ -342,12 +372,13 @@ async def test_pihole_connection(
 
 @router.post("/clear-measurements")
 async def clear_measurements(
-    pool: asyncpg.Pool = Depends(pg_dep),
     request: Request = None,
 ):
     """Clear all measurement data (targets, measurements, hops)."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
-    
+    require_destructive_settings_enabled(request_id)
+    pool = await pg_dep()
+
     logger.info(
         "Clearing measurement data",
         extra={"request_id": request_id, "action": "clear_measurements"}
@@ -465,12 +496,13 @@ async def trigger_enrichment(
 
 @router.post("/clear-dns")
 async def clear_dns(
-    pool: asyncpg.Pool = Depends(pg_dep),
     request: Request = None,
 ):
     """Clear all DNS data (dns_queries, dns_targets)."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
-    
+    require_destructive_settings_enabled(request_id)
+    pool = await pg_dep()
+
     logger.info(
         "Clearing DNS data",
         extra={"request_id": request_id, "action": "clear_dns"}
@@ -516,12 +548,13 @@ async def clear_dns(
 
 @router.post("/clear-graph")
 async def clear_graph(
-    driver = Depends(neo4j_dep),
     request: Request = None,
 ):
     """Clear all Neo4j graph data (nodes and relationships)."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
-    
+    require_destructive_settings_enabled(request_id)
+    driver = await neo4j_dep()
+
     logger.info(
         "Clearing graph data",
         extra={"request_id": request_id, "action": "clear_graph"}
@@ -570,13 +603,14 @@ async def clear_graph(
 
 @router.post("/clear-all")
 async def clear_all(
-    pool: asyncpg.Pool = Depends(pg_dep),
-    driver = Depends(neo4j_dep),
     request: Request = None,
 ):
     """Clear all data: measurements, DNS data, and graph data."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
-    
+    require_destructive_settings_enabled(request_id)
+    pool = await pg_dep()
+    driver = await neo4j_dep()
+
     logger.info(
         "Clearing all data",
         extra={"request_id": request_id, "action": "clear_all"}

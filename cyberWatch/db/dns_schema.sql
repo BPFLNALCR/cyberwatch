@@ -23,3 +23,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_dns_targets_domain_ip ON dns_targets(domai
 CREATE INDEX IF NOT EXISTS idx_dns_targets_ip ON dns_targets(ip);
 CREATE INDEX IF NOT EXISTS idx_dns_queries_domain ON dns_queries(domain);
 CREATE INDEX IF NOT EXISTS idx_dns_queries_client_ip ON dns_queries(client_ip);
+
+COMMENT ON COLUMN dns_queries.client_ip IS 'Nullable DNS client identifier. New ingestion leaves this NULL by default unless CYBERWATCH_DNS_STORE_CLIENT_IPS/privacy.store_client_ips is enabled for lab use.';
+COMMENT ON COLUMN dns_targets.last_client_ip IS 'Nullable DNS client identifier. New ingestion leaves this NULL by default unless CYBERWATCH_DNS_STORE_CLIENT_IPS/privacy.store_client_ips is enabled for lab use.';

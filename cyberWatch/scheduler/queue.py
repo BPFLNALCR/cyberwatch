@@ -25,7 +25,7 @@ class TargetTask(BaseModel):
 class TargetQueue:
     """Simple FIFO queue using Redis lists."""
 
-    def __init__(self, redis_url: Optional[str] = None, queue_key: str = "cyberWatch:targets"):
+    def __init__(self, redis_url: Optional[str] = None, queue_key: str = "cyberwatch:targets"):
         self.redis_url = redis_url or os.getenv("CYBERWATCH_REDIS_URL", "redis://localhost:6379/0")
         self.queue_key = queue_key
         self._client: Optional[aioredis.Redis] = None

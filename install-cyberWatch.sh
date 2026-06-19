@@ -379,6 +379,8 @@ write_env_file() {
   sudo tee "$ENV_FILE_DEST" >/dev/null <<EOF
 CYBERWATCH_PG_DSN="$dsn"
 CYBERWATCH_REDIS_URL="redis://localhost:6379/0"
+CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS="false"
+CYBERWATCH_DNS_STORE_CLIENT_IPS="false"
 NEO4J_URI="bolt://localhost:7687"
 NEO4J_USER="neo4j"
 NEO4J_PASSWORD="$neo4j_password"
