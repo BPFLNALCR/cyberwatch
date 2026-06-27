@@ -111,6 +111,28 @@ def test_api_ui_bind_exposure_classification() -> None:
     assert localhost.stdout.strip() == "localhost-only"
 
 
+def test_run_bind_warns_for_all_interface_host(tmp_path: Path) -> None:
+    systemctl = tmp_path / "systemctl"
+    systemctl.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == \"cat\" ]]; then\n"
+        "  echo \"ExecStart=/usr/bin/python -m uvicorn --host 0.0.0.0 --port 8000\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    systemctl.chmod(0o755)
+    ss = tmp_path / "ss"
+    ss.write_text("#!/usr/bin/env bash\nexit 0\n")
+    ss.chmod(0o755)
+
+    result = run_smoke("--run-bind", env={"PATH": f"{tmp_path}:{os.environ['PATH']}"})
+
+    assert result.returncode == 0
+    assert "check_id=bind_exposure" in result.stdout
+    assert "status=WARN" in result.stdout
+
+
 def test_required_journal_commands_are_listed() -> None:
     result = run_smoke("--journal-commands")
 

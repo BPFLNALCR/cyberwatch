@@ -86,7 +86,7 @@ See [architecture.md](architecture.md) for the full design and phased goals.
 - **Measurements**: `target`, tool used, timestamps, success, raw output, enrichment status, graph build status.
 - **Hops**: hop number, IP, RTT ms, ASN, prefix, org, country (enriched from multiple sources).
 - **ASNs**: Dedicated table with comprehensive metadata - org name, country, neighbor count, prefix count, PeeringDB data (facility count, peering policy, traffic levels, IRR AS-SET), measurement statistics, timestamps.
-- **DNS-derived targets**: domains/IPs with first/last seen, query counts, last client/qtype.
+- **DNS-derived targets**: domains/IPs with first/last seen, query counts, qtype, and optional client fields only when explicitly enabled for trusted lab use.
 - **AS graph edges** (Neo4j): AS nodes with org/country, `ROUTE` edges holding observed_count, min/max RTT, last_seen.
 
 How it appears:
@@ -172,6 +172,7 @@ Destructive settings endpoints, including `/settings/clear-dns`, return HTTP
   - `CYBERWATCH_PG_DSN`, `CYBERWATCH_REDIS_URL` (queue), `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` for API/enrichment/collector.
   - `CYBERWATCH_API_BASE` for the UI to reach the API.
   - `CYBERWATCH_DNS_CONFIG` to point the collector to a non-default config path.
+  - `CYBERWATCH_DNS_STORE_CLIENT_IPS=false` keeps DNS client identifier fields empty for new ingestion unless explicitly enabled for trusted lab use.
 - **Runtime settings stored in PostgreSQL** (configured during installation, adjustable via SQL or API):
   - **Worker settings** (`worker_settings` key):
     - `rate_limit_per_minute`: Max traceroutes per minute per worker (default: 30)

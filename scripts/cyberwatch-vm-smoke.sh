@@ -440,7 +440,7 @@ check_guardrails() {
 }
 
 check_bind_exposure() {
-  local output classification="unknown"
+  local output classification="unknown" status="PASS"
   if command -v systemctl >/dev/null 2>&1; then
     output="$(systemctl cat cyberWatch-api.service cyberWatch-ui.service 2>&1 || true)"
   else
@@ -449,12 +449,13 @@ check_bind_exposure() {
   if command -v ss >/dev/null 2>&1; then
     output="$output $(ss -ltnp 2>/dev/null | grep -E ':8000|:8080' || true)"
   fi
-  if printf '%s\n' "$output" | grep -q -- '--host 0.0.0.0'; then
+  if printf '%s\n' "$output" | grep -Eq -- '--host[= ]0\.0\.0\.0|0\.0\.0\.0:(8000|8080)|\[::\]:(8000|8080)|\*:(8000|8080)'; then
     classification="all-interfaces"
+    status="WARN"
   elif printf '%s\n' "$output" | grep -Eq -- '--host 127.0.0.1|--host localhost'; then
     classification="localhost-only"
   fi
-  emit_result PASS bind_exposure "systemctl cat; ss -ltnp" "API/UI bind addresses are explicit" "$classification $output"
+  emit_result "$status" bind_exposure "systemctl cat; ss -ltnp" "API/UI bind addresses are explicit; all-interface binds warn" "$classification $output"
 }
 
 check_enrichment() {

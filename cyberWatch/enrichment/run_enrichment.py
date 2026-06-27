@@ -10,7 +10,7 @@ from neo4j.exceptions import ServiceUnavailable, AuthError
 
 from cyberWatch.db import pg
 from cyberWatch.db.neo4j import get_driver
-from cyberWatch.db.settings import get_enrichment_settings
+from cyberWatch.db.settings import get_enrichment_settings_with_defaults
 from cyberWatch.enrichment import enricher, graph_builder
 from cyberWatch.enrichment.asn_expander import AsnExpanderConfig, run_once as expand_asns
 from cyberWatch.logging_config import get_logger
@@ -113,13 +113,7 @@ async def main() -> None:
     try:
         while True:
             # Load settings
-            settings = await get_enrichment_settings(pool) or {
-                "poll_interval_seconds": 10,
-                "asn_expansion_enabled": True,
-                "asn_expansion_interval_minutes": 60,
-                "asn_min_neighbor_count": 5,
-                "asn_max_ips_per_asn": 10,
-            }
+            settings = await get_enrichment_settings_with_defaults(pool)
             
             enriched = await enricher.run_once(pool)
             
