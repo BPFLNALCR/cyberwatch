@@ -7,9 +7,11 @@ SCHEMA_FILE="$ROOT_DIR/cyberWatch/db/schema.sql"
 ENV_FILE="/etc/cyberwatch/cyberwatch.env"
 DEFAULT_DSN="${CYBERWATCH_PG_DSN:-}"
 PURGE_PACKAGES="no"
+ASSUME_YES="${CYBERWATCH_UNINSTALL_YES:-no}"
 SYSTEMD_UNITS=(cyberWatch-api.service cyberWatch-ui.service cyberWatch-enrichment.service cyberWatch-dns-collector.service cyberWatch-remeasure.service)
 SYSTEMD_TEMPLATE_UNITS=(cyberWatch-worker@.service)
 DNS_CONFIG_DEST="/etc/cyberwatch/dns.yaml"
+VAR_LIB_DIRS=(/var/lib/cyberwatch /var/lib/cyberWatch)
 
 log() { printf "[cyberWatch] %s\n" "$*"; }
 warn() { printf "[cyberWatch][warn] %s\n" "$*"; }
@@ -47,6 +49,14 @@ PY
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --yes)
+      ASSUME_YES="yes"
+      shift
+      ;;
+    --clear-neo4j)
+      CYBERWATCH_CLEAR_NEO4J=1
+      shift
+      ;;
     --purge)
       PURGE_PACKAGES="yes"
       shift
@@ -58,10 +68,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 prompt_yes_no() {
-  local prompt="$1" default_yes="$2" reply
-  if [[ "${CI:-}" == "true" || "${CYBERWATCH_DROP_DB:-}" != "" ]]; then
-    [[ "${CYBERWATCH_DROP_DB:-}" == "1" ]] && return 0 || return 1
+  local prompt="$1" default_yes="$2" env_override="${3:-}" reply
+  if [[ -n "$env_override" && "${!env_override:-}" != "" ]]; then
+    is_truthy "${!env_override}" && return 0 || return 1
+  fi
+  if is_truthy "$ASSUME_YES"; then
+    [[ "$default_yes" == "y" ]] && return 0 || return 1
+  fi
+  if [[ "${CI:-}" == "true" ]]; then
+    [[ "$default_yes" == "y" ]] && return 0 || return 1
   fi
   if [[ "$default_yes" == "y" ]]; then
     prompt+=" [Y/n]: "
@@ -96,7 +119,7 @@ maybe_drop_tables() {
     dsn="postgresql://postgres:postgres@localhost:5432/cyberWatch"
   fi
   local pgpass="${PGPASSWORD:-}"
-  if prompt_yes_no "Drop cyberWatch tables?" "n"; then
+  if prompt_yes_no "Drop cyberWatch tables?" "n" "CYBERWATCH_DROP_DB"; then
     read -r -p "PostgreSQL DSN [$dsn]: " input_dsn || true
     dsn=$(sanitize_dsn "${input_dsn:-$dsn}")
     if [[ -z "$pgpass" ]]; then
@@ -129,46 +152,36 @@ remove_redis_data() {
   if prompt_yes_no "Clear cyberWatch Redis queues and data?" "y"; then
     log "Clearing cyberWatch Redis data"
     redis-cli DEL cyberwatch:targets 2>/dev/null || true
+    redis-cli DEL cyberWatch:targets 2>/dev/null || true
     redis-cli KEYS "cyberwatch:*" | xargs -r redis-cli DEL 2>/dev/null || true
+    redis-cli KEYS "cyberWatch:*" | xargs -r redis-cli DEL 2>/dev/null || true
     log "Redis data cleared"
   fi
 }
 
 remove_neo4j() {
-  if ! command -v systemctl >/dev/null 2>&1; then
-    log "systemctl not found; skipping Neo4j removal."
+  if ! prompt_yes_no "Clear cyberWatch graph data in Neo4j?" "n" "CYBERWATCH_CLEAR_NEO4J"; then
+    log "Skipping Neo4j graph cleanup by default. Use --clear-neo4j or CYBERWATCH_CLEAR_NEO4J=1 to opt in."
     return
   fi
-  
-  if ! systemctl list-unit-files | grep -q "neo4j.service"; then
-    log "Neo4j service not found; skipping Neo4j removal."
+
+  if ! command -v cypher-shell >/dev/null 2>&1; then
+    warn "cypher-shell not found; skipping Neo4j graph cleanup."
     return
   fi
-  
-  if prompt_yes_no "Remove Neo4j and clean all data?" "y"; then
-    log "Stopping and disabling Neo4j service"
-    sudo systemctl stop neo4j.service || true
-    sudo systemctl disable neo4j.service || true
-    
-    log "Removing all Neo4j data and configuration"
-    # Remove all Neo4j data including auth files
-    sudo rm -rf /var/lib/neo4j/data/* || true
-    sudo rm -rf /var/lib/neo4j/data/dbms/auth* || true
-    sudo rm -rf /var/lib/neo4j/data/databases/* || true
-    sudo rm -rf /var/lib/neo4j/data/transactions/* || true
-    sudo rm -rf /var/lib/neo4j/logs/* || true
-    
-    # Remove Neo4j configuration
-    sudo rm -rf /etc/neo4j/* || true
-    
-    if [[ "$PURGE_PACKAGES" == "yes" ]]; then
-      log "Purging Neo4j package"
-      sudo apt-get purge -y neo4j || true
-      sudo rm -f /etc/apt/sources.list.d/neo4j.list || true
-      sudo rm -f /usr/share/keyrings/neo4j.gpg || true
-    else
-      log "To fully remove Neo4j package, run with --purge flag"
-    fi
+
+  local neo4j_user="${NEO4J_USER:-neo4j}" neo4j_password="${NEO4J_PASSWORD:-}"
+  if [[ -z "$neo4j_password" ]]; then
+    neo4j_password="$(read_env_var "$ENV_FILE" "NEO4J_PASSWORD" || true)"
+  fi
+  if [[ -z "$neo4j_password" ]]; then
+    warn "NEO4J_PASSWORD is unavailable; skipping Neo4j graph cleanup."
+    return
+  fi
+
+  log "Clearing cyberWatch Neo4j graph data with cypher-shell"
+  if ! printf 'MATCH (n) DETACH DELETE n;\n' | cypher-shell -u "$neo4j_user" -p "$neo4j_password"; then
+    warn "Failed to clear Neo4j graph data. Check Neo4j status and credentials."
   fi
 }
 
@@ -182,10 +195,13 @@ purge_packages() {
 }
 
 clean_var_lib() {
-  if [[ -d /var/lib/cyberWatch ]]; then
-    log "Cleaning /var/lib/cyberWatch"
-    sudo rm -rf /var/lib/cyberWatch
-  fi
+  local dir
+  for dir in "${VAR_LIB_DIRS[@]}"; do
+    if [[ -d "$dir" ]]; then
+      log "Cleaning $dir"
+      sudo rm -rf "$dir"
+    fi
+  done
 }
 
 remove_services() {
@@ -245,6 +261,7 @@ remove_logs() {
 
 main() {
   log "Starting cyberWatch uninstallation..."
+  log "Default cleanup is limited to cyberWatch-owned services, configuration, logs, venv, /var/lib/cyberwatch, and Redis keys."
   log ""
   
   # Stop and remove all services first

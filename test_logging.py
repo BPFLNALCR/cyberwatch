@@ -108,7 +108,7 @@ def test_component_logging():
     print("✓ Component logging test passed\n")
 
 
-async def test_async_logging():
+def test_async_logging():
     """Test logging in async context."""
     print("Testing async logging...")
     
@@ -119,7 +119,7 @@ async def test_async_logging():
         await asyncio.sleep(0.1)
         logger.info("Completed async operation", extra={"action": "async_complete", "outcome": "success"})
     
-    await async_operation()
+    asyncio.run(async_operation())
     
     print("✓ Async logging test passed\n")
 
@@ -137,7 +137,7 @@ def main():
         test_sensitive_data_redaction()
         test_error_logging()
         test_component_logging()
-        asyncio.run(test_async_logging())
+        test_async_logging()
         
         print("=" * 60)
         print("All tests passed! ✓")

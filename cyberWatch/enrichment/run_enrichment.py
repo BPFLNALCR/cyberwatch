@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 
 from rich.console import Console
 from neo4j.exceptions import ServiceUnavailable, AuthError
 
 from cyberWatch.db import pg
 from cyberWatch.db.neo4j import get_driver
+from cyberWatch.db.settings import get_enrichment_settings
 from cyberWatch.enrichment import enricher, graph_builder
+from cyberWatch.enrichment.asn_expander import AsnExpanderConfig, run_once as expand_asns
 from cyberWatch.logging_config import get_logger
+from cyberWatch.scheduler.queue import TargetQueue
 
 console = Console()
 logger = get_logger("enrichment")
@@ -87,7 +91,7 @@ async def main() -> None:
     console.print("[cyan]Starting enrichment scheduler")
     
     pool = await pg.create_pool(pg_dsn)
-    queue = Queue(redis_url)
+    queue = TargetQueue(redis_url)
     
     # Initialize Neo4j with retry logic
     try:

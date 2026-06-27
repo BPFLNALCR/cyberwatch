@@ -104,6 +104,9 @@ Merge priority: PeeringDB > External > Cymru. Always upsert to `asns` table.
 # Activate virtualenv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 
+# Default pure/offline tests; must not require live services
+python -m pytest
+
 # Run services manually
 uvicorn cyberWatch.api.server:app --reload --port 8000
 python -m cyberWatch.workers.worker
@@ -111,6 +114,7 @@ python -m cyberWatch.enrichment.run_enrichment
 
 # Check queue depth
 redis-cli LLEN cyberwatch:targets
+redis-cli LLEN cyberWatch:targets  # legacy mixed-case key; detect before migration
 
 # View logs (JSONL format)
 tail -f logs/cyberwatch.jsonl | jq '.'
@@ -138,13 +142,25 @@ grep '"outcome":"error"' logs/cyberwatch.jsonl | jq '.'
 ## Testing
 
 ```bash
-# Run logging tests
-python test_logging.py
+# Default pure/offline test suite
+python -m pytest
+
+# VM-only smoke checks for live services and lifecycle behavior
+scripts/cyberwatch-vm-smoke.sh --help
+scripts/cyberwatch-vm-smoke.sh --run-line-endings
+scripts/cyberwatch-vm-smoke.sh --run-services
+scripts/cyberwatch-vm-smoke.sh --run-api
+scripts/cyberwatch-vm-smoke.sh --run-guardrails
+scripts/cyberwatch-vm-smoke.sh --run-redis
 
 # API health check
 curl http://localhost:8000/health
 curl http://localhost:8000/
 ```
+
+Do not put PostgreSQL, Redis, Neo4j, internet access, traceroute/scamper,
+Pi-hole, root, or systemd requirements into the default pytest path. Those are
+validated through the dedicated Debian 13 VM smoke surface.
 
 ## DNS Collector Filter Patterns
 
@@ -175,7 +191,7 @@ dns_resolution:
 ./install-cyberWatch.sh    # Interactive prompts for schema, Neo4j, settings
 ```
 **What it does:**
-1. Installs apt packages: python3, redis-server, postgresql, neo4j, traceroute, scamper, mtr-tiny
+1. Installs apt packages: python3, python-is-python3, redis-server, postgresql, neo4j, traceroute, scamper, mtr-tiny
 2. Creates `.venv` and installs `cyberWatch/requirements.txt`
 3. Prompts to apply PostgreSQL schemas (`schema.sql`, `dns_schema.sql`)
 4. Creates `/etc/cyberwatch/cyberwatch.env` with DSN, Redis URL, Neo4j credentials
@@ -195,10 +211,14 @@ CYBERWATCH_APPLY_SCHEMA=1 ./install-cyberWatch.sh
 ```
 **What it removes:**
 - Stops/disables all cyberWatch systemd units
-- Clears Redis queue (`cyberwatch:targets`)
+- Clears Redis keys (`cyberwatch:*`) and detects/removes legacy `cyberWatch:*`
 - Optionally drops PostgreSQL tables/database
-- Optionally removes Neo4j data
-- Removes `.venv`, logs, `/etc/cyberwatch/`
+- Neo4j graph cleanup is disabled by default; require `--clear-neo4j` or `CYBERWATCH_CLEAR_NEO4J=1`
+- Removes `.venv`, logs, `/etc/cyberwatch/`, and cyberWatch-owned `/var/lib/cyberwatch`
+
+Destructive settings endpoints return HTTP 403 by default. Use
+`CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS=1` or the `destructive_settings_enabled`
+settings-table key only for controlled lab resets.
 
 ## Systemd Service Pattern
 

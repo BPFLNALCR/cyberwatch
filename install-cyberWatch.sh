@@ -56,7 +56,7 @@ require_debian() {
 
 install_packages() {
   # NOTE: postgresql-client alone is not sufficient; we need the server running for localhost schema application.
-  local pkgs=(python3 python3-venv python3-pip redis-server postgresql postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq apt-transport-https ca-certificates gnupg)
+  local pkgs=(python3 python-is-python3 python3-venv python3-pip redis-server postgresql postgresql-client libpq-dev traceroute scamper mtr-tiny curl jq apt-transport-https ca-certificates gnupg)
   log "Installing system packages: ${pkgs[*]}"
   sudo apt-get update -y
   sudo apt-get install -y "${pkgs[@]}"

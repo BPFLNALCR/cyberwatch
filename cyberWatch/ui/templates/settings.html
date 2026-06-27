@@ -156,11 +156,15 @@
   </div>
   
   <p class="cw-body">
-    Remove data from the database. This action cannot be undone. Settings and configuration will be preserved.
+    Remove data from the database. These API actions are disabled by default and require an explicit operator opt-in.
+    Settings and configuration will be preserved.
   </p>
 
   <div class="cw-alert cw-alert-warning">
-    <strong>Warning:</strong> These actions are permanent and cannot be undone. Always confirm before proceeding.
+    <strong>Disabled by default:</strong> Destructive settings endpoints return HTTP 403 unless
+    <code>CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS=1</code> or the
+    <code>destructive_settings_enabled</code> settings-table policy is enabled.
+    These actions are permanent when explicitly enabled.
   </div>
 
   <div class="cw-grid">

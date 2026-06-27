@@ -9,6 +9,7 @@ Autonomous internet measurement and topology mapping node.
 - [Architecture Overview](#architecture-overview)
 - [Data Model \& What cyberWatch Shows You](#data-model--what-cyberwatch-shows-you)
 - [Installation (Debian)](#installation-debian)
+- [Debian 13 VM Validation](#debian-13-vm-validation)
 - [Configuration](#configuration)
 - [Running cyberWatch](#running-cyberwatch)
 - [Using the API and UI](#using-the-api-and-ui)
@@ -106,7 +107,7 @@ cd cyberwatch
 ./install-cyberWatch.sh
 ```
 3) Installer actions (from [install-cyberWatch.sh](install-cyberWatch.sh)):
-- Installs apt packages: python3, python3-venv, python3-pip, redis-server, postgresql, postgresql-client, libpq-dev, neo4j, traceroute, scamper, mtr-tiny, curl, jq.
+- Installs apt packages: python3, python-is-python3, python3-venv, python3-pip, redis-server, postgresql, postgresql-client, libpq-dev, neo4j, traceroute, scamper, mtr-tiny, curl, jq.
 - Creates `.venv` and installs [cyberWatch/requirements.txt](cyberWatch/requirements.txt).
 - Optionally applies PostgreSQL schemas [cyberWatch/db/schema.sql](cyberWatch/db/schema.sql) and [cyberWatch/db/dns_schema.sql](cyberWatch/db/dns_schema.sql) to DSN `CYBERWATCH_PG_DSN` (default `postgresql://postgres:postgres@localhost:5432/cyberWatch`).
 - **Initializes default settings** for workers (rate limits, concurrency), enrichment (ASN expansion), and remeasurement (intervals) in the database.
@@ -120,6 +121,45 @@ cd cyberwatch
   - [systemd/cyberWatch-dns-collector.service](systemd/cyberWatch-dns-collector.service) - DNS query ingestion
   - **[systemd/cyberWatch-worker@.service](systemd/cyberWatch-worker@.service)** - Measurement workers (2 instances: `@1`, `@2`)
   - **[systemd/cyberWatch-remeasure.service](systemd/cyberWatch-remeasure.service)** - Periodic remeasurement scheduler
+
+## Debian 13 VM Validation
+
+The authoritative development and deployment smoke surface is the dedicated
+snapshot-backed Debian 13 cyberWatch VM. See
+[docs/debian13-vm-surface.md](docs/debian13-vm-surface.md).
+
+Default pure tests:
+
+```bash
+python -m pytest
+```
+
+VM-only smoke checks:
+
+```bash
+scripts/cyberwatch-vm-smoke.sh --help
+scripts/cyberwatch-vm-smoke.sh --run-line-endings
+scripts/cyberwatch-vm-smoke.sh --run-services
+scripts/cyberwatch-vm-smoke.sh --run-api
+scripts/cyberwatch-vm-smoke.sh --run-guardrails
+scripts/cyberwatch-vm-smoke.sh --run-redis
+scripts/cyberwatch-vm-smoke.sh --run-journals
+```
+
+Install, uninstall, and reinstall smoke checks require snapshot confirmation and
+the explicit lifecycle gate:
+
+```bash
+export CYBERWATCH_VM_SNAPSHOT_CONFIRMED=1
+export CYBERWATCH_VM_SNAPSHOT_LABEL="pre-install-YYYYMMDD"
+scripts/cyberwatch-vm-smoke.sh --yes-snapshot --allow-lifecycle --run-install
+scripts/cyberwatch-vm-smoke.sh --yes-snapshot --allow-lifecycle --run-uninstall-reinstall
+```
+
+Destructive settings endpoints, including `/settings/clear-dns`, return HTTP
+403 by default. Controlled lab resets require
+`CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS=1` or the settings-table key
+`destructive_settings_enabled`.
 
 ## Configuration
 - DNS collector config lives at `/etc/cyberwatch/dns.yaml` (installed from [config/cyberwatch_dns.example.yaml](config/cyberwatch_dns.example.yaml)). Key fields:
@@ -255,6 +295,9 @@ sudo journalctl -u 'cyberWatch-worker@*' -f
 # Check Redis queue depth
 redis-cli LLEN cyberwatch:targets
 
+# Check for legacy mixed-case queue state before migration
+redis-cli LLEN cyberWatch:targets
+
 # View all logs
 sudo journalctl -u 'cyberWatch-*' -f
 
@@ -334,9 +377,11 @@ Use [uninstall-cyberWatch.sh](uninstall-cyberWatch.sh):
 ```
 What it does:
 - Stops/disables systemd units (API, UI, enrichment, DNS collector) and removes their unit files.
-- Removes `.venv` and cleans `/var/lib/cyberWatch` if present.
+- Removes `.venv`, `logs/`, `/etc/cyberwatch`, `/var/lib/cyberwatch`, and the legacy `/var/lib/cyberWatch` path if present.
+- Clears cyberWatch Redis keys (`cyberwatch:*` and legacy `cyberWatch:*`).
 - Optional prompt to drop PostgreSQL tables (`dns_queries`, `dns_targets`, `hops`, `measurements`, `targets`).
-- Optional prompt to remove `/etc/cyberwatch/dns.yaml`.
+- Neo4j graph cleanup is disabled by default; use `--clear-neo4j` or `CYBERWATCH_CLEAR_NEO4J=1` for an explicit lab reset.
+- Package removal is only performed with `--purge`.
 
 ## Roadmap / Future Work
 From [architecture.md](architecture.md):

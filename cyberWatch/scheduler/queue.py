@@ -13,6 +13,34 @@ from cyberWatch.logging_config import get_logger
 
 logger = get_logger("queue")
 
+CANONICAL_TARGET_QUEUE_KEY = "cyberwatch:targets"
+LEGACY_TARGET_QUEUE_KEY = "cyberWatch:targets"
+
+
+def queue_key_migration_message(canonical_depth: int | str, legacy_depth: int | str) -> str:
+    """Return operator guidance for legacy mixed-case Redis queue state."""
+    return (
+        f"Canonical Redis queue is {CANONICAL_TARGET_QUEUE_KEY} with depth {canonical_depth}. "
+        f"Legacy key {LEGACY_TARGET_QUEUE_KEY} has depth {legacy_depth}. "
+        "If legacy depth is nonzero, migrate intentionally with: "
+        f"while redis-cli LLEN {LEGACY_TARGET_QUEUE_KEY} | grep -vq '^0$'; do "
+        f"redis-cli RPOPLPUSH {LEGACY_TARGET_QUEUE_KEY} {CANONICAL_TARGET_QUEUE_KEY} >/dev/null; "
+        "done"
+    )
+
+
+def queue_key_status(canonical_depth: int, legacy_depth: int) -> dict:
+    """Summarize canonical/legacy queue state without requiring Redis access."""
+    status = "WARN" if legacy_depth > 0 else "PASS"
+    return {
+        "status": status,
+        "canonical_key": CANONICAL_TARGET_QUEUE_KEY,
+        "canonical_depth": canonical_depth,
+        "legacy_key": LEGACY_TARGET_QUEUE_KEY,
+        "legacy_depth": legacy_depth,
+        "message": queue_key_migration_message(canonical_depth, legacy_depth),
+    }
+
 
 class TargetTask(BaseModel):
     """Minimal target task stored in Redis."""
@@ -25,7 +53,7 @@ class TargetTask(BaseModel):
 class TargetQueue:
     """Simple FIFO queue using Redis lists."""
 
-    def __init__(self, redis_url: Optional[str] = None, queue_key: str = "cyberWatch:targets"):
+    def __init__(self, redis_url: Optional[str] = None, queue_key: str = CANONICAL_TARGET_QUEUE_KEY):
         self.redis_url = redis_url or os.getenv("CYBERWATCH_REDIS_URL", "redis://localhost:6379/0")
         self.queue_key = queue_key
         self._client: Optional[aioredis.Redis] = None

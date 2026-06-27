@@ -1,17 +1,19 @@
 """Settings management API endpoints."""
 from __future__ import annotations
 
+import os
 from datetime import datetime
-from typing import Optional
+from typing import Mapping, Optional
 
 import aiohttp
 import asyncpg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from cyberWatch.api.models import ok, err
 from cyberWatch.api.utils.db import pg_dep, neo4j_dep
 from cyberWatch.db.settings import (
+    get_setting,
     get_pihole_settings,
     save_pihole_settings,
     request_collector_restart,
@@ -22,6 +24,101 @@ from cyberWatch.logging_config import get_logger
 
 logger = get_logger("api")
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+DESTRUCTIVE_SETTINGS_OPT_IN_ENV = "CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS"
+DESTRUCTIVE_SETTINGS_POLICY_KEY = "destructive_settings_enabled"
+TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def destructive_settings_enabled(
+    *,
+    environ: Mapping[str, str] | None = None,
+    policy: Mapping[str, object] | None = None,
+) -> bool:
+    """Return whether destructive settings endpoints are explicitly enabled."""
+    env = os.environ if environ is None else environ
+    env_value = env.get(DESTRUCTIVE_SETTINGS_OPT_IN_ENV)
+    if env_value is not None:
+        return env_value.strip().lower() in TRUE_VALUES
+
+    if not policy:
+        return False
+
+    explicit_value = policy.get(DESTRUCTIVE_SETTINGS_POLICY_KEY, policy.get("enabled"))
+    if isinstance(explicit_value, str):
+        return explicit_value.strip().lower() in TRUE_VALUES
+    return bool(explicit_value)
+
+
+def destructive_refusal_detail(action: str) -> dict:
+    """Build the stable refusal payload for disabled destructive operations."""
+    return {
+        "status": "error",
+        "action": action,
+        "detail": (
+            "Destructive settings endpoints are disabled by default. "
+            f"Set {DESTRUCTIVE_SETTINGS_OPT_IN_ENV}=1 or enable "
+            f"{DESTRUCTIVE_SETTINGS_POLICY_KEY} in the settings table to allow this action."
+        ),
+    }
+
+
+def require_destructive_settings_enabled(
+    action: str,
+    *,
+    request_id: str = "unknown",
+    environ: Mapping[str, str] | None = None,
+    policy: Mapping[str, object] | None = None,
+) -> None:
+    """Raise HTTP 403 unless destructive settings actions are explicitly enabled."""
+    if destructive_settings_enabled(environ=environ, policy=policy):
+        logger.warning(
+            "Destructive settings endpoint allowed",
+            extra={
+                "request_id": request_id,
+                "action": action,
+                "guardrail": "destructive_settings",
+                "outcome": "allowed",
+            },
+        )
+        return
+
+    logger.warning(
+        "Destructive settings endpoint refused",
+        extra={
+            "request_id": request_id,
+            "action": action,
+            "guardrail": "destructive_settings",
+            "outcome": "refused",
+        },
+    )
+    raise HTTPException(status_code=403, detail=destructive_refusal_detail(action))
+
+
+async def _destructive_settings_policy(pool: asyncpg.Pool) -> Optional[Mapping[str, object]]:
+    """Load the optional settings-table policy, defaulting closed on errors."""
+    try:
+        return await get_setting(pool, DESTRUCTIVE_SETTINGS_POLICY_KEY)
+    except Exception as exc:
+        logger.warning(
+            "Failed to load destructive settings policy; defaulting disabled",
+            extra={
+                "action": "destructive_settings_policy_load",
+                "outcome": "default_disabled",
+                "error_type": type(exc).__name__,
+            },
+        )
+        return None
+
+
+async def require_destructive_settings_enabled_for_request(
+    action: str,
+    pool: asyncpg.Pool,
+    request_id: str,
+) -> None:
+    """Load request policy and enforce the destructive settings guardrail."""
+    policy = await _destructive_settings_policy(pool)
+    require_destructive_settings_enabled(action, request_id=request_id, policy=policy)
 
 
 class PiholeSettingsRequest(BaseModel):
@@ -347,6 +444,7 @@ async def clear_measurements(
 ):
     """Clear all measurement data (targets, measurements, hops)."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    await require_destructive_settings_enabled_for_request("clear_measurements", pool, request_id)
     
     logger.info(
         "Clearing measurement data",
@@ -470,6 +568,7 @@ async def clear_dns(
 ):
     """Clear all DNS data (dns_queries, dns_targets)."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    await require_destructive_settings_enabled_for_request("clear_dns", pool, request_id)
     
     logger.info(
         "Clearing DNS data",
@@ -516,11 +615,13 @@ async def clear_dns(
 
 @router.post("/clear-graph")
 async def clear_graph(
+    pool: asyncpg.Pool = Depends(pg_dep),
     driver = Depends(neo4j_dep),
     request: Request = None,
 ):
     """Clear all Neo4j graph data (nodes and relationships)."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    await require_destructive_settings_enabled_for_request("clear_graph", pool, request_id)
     
     logger.info(
         "Clearing graph data",
@@ -576,6 +677,7 @@ async def clear_all(
 ):
     """Clear all data: measurements, DNS data, and graph data."""
     request_id = getattr(request.state, "request_id", "unknown") if request else "unknown"
+    await require_destructive_settings_enabled_for_request("clear_all", pool, request_id)
     
     logger.info(
         "Clearing all data",
