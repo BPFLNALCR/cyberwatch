@@ -1,0 +1,37 @@
+approval_policy = "on-request"
+default_permissions = "cyberwatch-local"
+
+[permissions.cyberwatch-local]
+description = "cyberWatch local WSL development: repo writes plus localhost-only network."
+extends = ":workspace"
+
+[permissions.cyberwatch-local.filesystem]
+":minimal" = "read"
+
+[permissions.cyberwatch-local.filesystem.":workspace_roots"]
+"." = "write"
+"**/*.env" = "deny"
+"**/*secret*" = "deny"
+"**/*token*" = "deny"
+"**/*password*" = "deny"
+
+[permissions.cyberwatch-local.network]
+enabled = true
+
+[permissions.cyberwatch-local.network.domains]
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"
+
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+CYBERWATCH_API_BASE = "http://127.0.0.1:8000"
+CYBERWATCH_UI_BASE = "http://127.0.0.1:8080"
+CYBERWATCH_PG_DSN = "postgresql://cyberwatch_test:cyberwatch_test@localhost:5432/cyberwatch_test"
+CYBERWATCH_REDIS_URL = "redis://localhost:6379/15"
+NEO4J_URI = "bolt://localhost:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "cyberwatch_test"
+CYBERWATCH_ENABLE_DESTRUCTIVE_SETTINGS = "false"
